@@ -15,3 +15,15 @@ scan:
   nikto: {enabled: true, binary: nikto, timeout: 900, tuning: "123456789abcde"}
   enum4linux: {enabled: true, binary: enum4linux-ng, timeout: 600}
   greenbone: {enabled: false, mode: socket, socket: "/run/gvmd/gvmd.sock", username_env: "POLYMER_GVM_USERNAME", password_env: "POLYMER_GVM_PASSWORD", scan_config_id: "daba56c8-73ec-11df-a475-002264764cea", scanner_id: "08b69003-5fc2-4037-a479-93b440211c73", poll_interval: 15, task_timeout: 7200}
+
+# Correlation and vulnerability intelligence. Enrichment is best-effort.
+intelligence:
+  enabled: true
+  enrichment:
+    enabled: true
+    offline: false
+    timeout: 30
+    nvd_url: "https://services.nvd.nist.gov/rest/json/cves/2.0"
+    kev_url: "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
+    nvd_api_key_env: "NVD_API_KEY"
+    nvd_delay_seconds: 0.7

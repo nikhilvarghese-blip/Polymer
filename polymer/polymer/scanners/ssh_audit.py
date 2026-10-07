@@ -5,7 +5,7 @@ import shutil
 from polymer.core.services import ssh_ports
 from polymer.models.schema import Asset, Finding, ToolResult
 from polymer.scanners.base import Scanner
-from polymer.utils.command import run_command
+from polymer.utils.command import CommandExecutionError, run_command
 
 
 class SSHAuditScanner(Scanner):
@@ -22,17 +22,25 @@ class SSHAuditScanner(Scanner):
             return ToolResult(tool=self.name, status="not_applicable", message="no SSH service detected")
         findings: list[Finding] = []
         artifacts=[]
+        errors=[]
+        successful=0
         for port in ports:
             outfile = self.workdir / f"{asset.ip}_{port}.json"
-            proc = run_command([self.config.get("binary", "ssh-audit"), "-j", f"{asset.ip}:{port}"], timeout=int(self.config.get("timeout", 120)))
+            try:
+                proc = run_command([self.config.get("binary", "ssh-audit"), "-j", f"{asset.ip}:{port}"], timeout=int(self.config.get("timeout", 120)))
+            except CommandExecutionError as exc:
+                errors.append(f"{asset.ip}:{port}: {exc}")
+                continue
             raw = proc.stdout.strip()
             if raw:
-                outfile.write_text(raw, errors="replace")
+                outfile.write_text(raw, encoding="utf-8", errors="replace")
                 artifacts.append(str(outfile))
                 try:
                     data=json.loads(raw)
-                except json.JSONDecodeError:
+                except json.JSONDecodeError as exc:
+                    errors.append(f"{asset.ip}:{port}: invalid JSON: {exc}")
                     continue
+                successful += 1
                 recs=data.get("recommendations", {})
                 for sev_key, severity in (("critical","critical"),("warning","medium"),("warn","medium")):
                     items=recs.get(sev_key, [])
@@ -53,5 +61,8 @@ class SSHAuditScanner(Scanner):
                         for note in notes:
                             findings.append(Finding(tool=self.name,title=f"{section.upper()} {alg}: {note}",severity="medium",category="ssh",port=port,protocol="tcp"))
             elif proc.returncode != 0:
-                return ToolResult(tool=self.name,status="failed",message=proc.stderr.strip() or "ssh-audit failed")
-        return ToolResult(tool=self.name,status="completed",findings=findings,raw_artifact=", ".join(artifacts) or None)
+                errors.append(proc.stderr.strip() or f"ssh-audit exited with code {proc.returncode}")
+            else:
+                errors.append(f"{asset.ip}:{port}: ssh-audit returned no JSON")
+        status="completed" if successful else "failed"
+        return ToolResult(tool=self.name,status=status,findings=findings,raw_artifact=", ".join(artifacts) or None,message="; ".join(errors) or None)

@@ -6,7 +6,7 @@
 
 ## Status
 
-Phase 2 / v0.2.0. Adaptive routing is implemented for Nmap, Nuclei, Wazuh SCA, ssh-audit, testssl.sh, Nikto, enum4linux-ng and optional Greenbone/GVM. See `docs/PHASE2_INSTALL.md`.
+Phase 3 / v0.3.0. Adaptive routing is implemented for Nmap, Nuclei, Wazuh SCA, ssh-audit, testssl.sh, Nikto, enum4linux-ng and optional Greenbone/GVM. Cross-tool correlation, vulnerability intelligence, delta reports, and colored CLI progress are included. See `docs/PHASE2_INSTALL.md` and `docs/PHASE3.md`.
 
 ## Why the architecture is IP-centric
 
@@ -18,7 +18,10 @@ IP address
 └── future adapters (Greenbone, TLS, SSH, SMB, ...)
 ```
 
-Results are written both as one `polymer.json` keyed by IP and as `by_ip/<IP>/...` artifacts.
+Results are written as lossless JSON and as a structured CSV report bundle. The
+canonical `polymer.csv` is finding-oriented, `assets.csv` guarantees one summary
+row for every requested IP, and each `by_ip/<IP>/` directory contains isolated
+JSON and CSV reports. See `docs/CSV_REPORTS.md`.
 
 ## Quick start on Kali
 
@@ -32,6 +35,11 @@ source .venv/bin/activate
 polymer validate --targets targets.txt --config config/polymer.yaml
 polymer scan --targets targets.txt --config config/polymer.yaml
 ```
+
+The scan command displays an overall project bar and a scanner-level bar for the
+active target. Scanner failures are retained in `polymer.json`; pass
+`--fail-on-tool-error` when automation should receive exit status 2 for a partial
+scan. Use the global `--debug` option before the command for full tracebacks.
 
 ## Wazuh SCA
 
@@ -74,12 +82,22 @@ The base image currently includes Nmap. Nuclei is deliberately not installed fro
 ```text
 output/run-<UTC timestamp>/
 ├── polymer.json
+├── polymer.csv              # canonical correlated/raw-fallback report
+├── raw_findings.csv         # original scanner findings
+├── assets.csv               # one row per requested IP
+├── services.csv             # discovered network services
+├── scanner_status.csv       # execution coverage and diagnostics
 ├── raw/
 │   ├── nmap/
 │   └── nuclei/
 └── by_ip/
     └── 192.168.56.10/
         ├── combined.json
+        ├── report.csv
+        ├── summary.csv
+        ├── services.csv
+        ├── scanner_status.csv
+        ├── raw_findings.csv
         ├── nmap.json
         ├── nuclei.json
         └── wazuh_sca.json
@@ -112,3 +130,27 @@ polymer doctor --config config/polymer.yaml
 polymer plan --targets targets.txt --config config/polymer.yaml --profile standard
 polymer scan --targets targets.txt --config config/polymer.yaml --profile standard
 ```
+
+## Phase 3 commands
+
+```bash
+# Scan, correlate, and enrich findings (default)
+polymer scan --targets targets.txt --config config/polymer.yaml --profile standard
+
+# Compare with an earlier run
+polymer scan --targets targets.txt --baseline output/run-OLD/polymer.json
+
+# Analyze an existing result without rescanning
+polymer analyze --input output/run-OLD/polymer.json
+```
+
+Use `--no-intelligence` for an offline raw scan, or set
+`intelligence.enrichment.offline: true` to correlate using cache-only enrichment.
+
+## CSV reports
+
+CSV reports are generated automatically for both `scan` and `analyze`; no extra
+flag is required. The primary final report is `polymer.csv`. It adds coverage,
+priority, confidence, CVSS, KEV, source-tool, evidence, remediation, and scanner
+diagnostic fields beyond a traditional vulnerability-scanner export. Detailed
+schema and interpretation guidance is in `docs/CSV_REPORTS.md`.

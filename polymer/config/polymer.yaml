@@ -52,3 +52,15 @@ scan:
     scanner_id: "08b69003-5fc2-4037-a479-93b440211c73"
     poll_interval: 15
     task_timeout: 7200
+
+# Correlation and vulnerability intelligence. Enrichment is best-effort.
+intelligence:
+  enabled: true
+  enrichment:
+    enabled: true
+    offline: false
+    timeout: 30
+    nvd_url: "https://services.nvd.nist.gov/rest/json/cves/2.0"
+    kev_url: "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
+    nvd_api_key_env: "NVD_API_KEY"
+    nvd_delay_seconds: 0.7

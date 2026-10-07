@@ -19,8 +19,17 @@ class NmapScanner(Scanner):
             return ToolResult(tool=self.name, status="unavailable", message="nmap not found")
 
         outfile = self.workdir / f"{asset.ip}.xml"
-        args = [self.config.get("binary", "nmap"), *self.config.get("arguments", ["-Pn", "-sV", "--version-light"]), "-oX", str(outfile), asset.ip]
-        proc = run_command(args)
+        arguments = self.config.get("arguments", ["-Pn", "-sV", "--version-light"])
+        if not isinstance(arguments, list) or not all(
+            isinstance(argument, str) for argument in arguments
+        ):
+            return ToolResult(
+                tool=self.name,
+                status="failed",
+                message="nmap arguments must be a list of strings",
+            )
+        args = [self.config.get("binary", "nmap"), *arguments, "-oX", str(outfile), asset.ip]
+        proc = run_command(args, timeout=int(self.config.get("timeout", 1800)))
         if proc.returncode != 0 or not outfile.exists():
             return ToolResult(tool=self.name, status="failed", message=proc.stderr.strip() or "nmap failed")
 
