@@ -1,0 +1,54 @@
+project:
+  name: Polymer
+  output_dir: output
+
+scope:
+  allow_public_ips: false
+  max_expanded_hosts: 4096
+
+scan:
+  profile: standard
+  concurrency: 1
+  nmap:
+    enabled: true
+    binary: nmap
+    arguments: ["-Pn", "-sV", "--version-light"]
+  nuclei:
+    enabled: true
+    binary: nuclei
+    timeout: 600
+    severity: ["critical", "high", "medium", "low", "info"]
+  wazuh:
+    enabled: false
+    url: "https://127.0.0.1:55000"
+    verify_tls: true
+    username_env: "POLYMER_WAZUH_USERNAME"
+    password_env: "POLYMER_WAZUH_PASSWORD"
+  ssh_audit:
+    enabled: true
+    binary: ssh-audit
+    timeout: 120
+  testssl:
+    enabled: true
+    binary: testssl
+    timeout: 600
+  nikto:
+    enabled: true
+    binary: nikto
+    timeout: 900
+    # Conservative default: do not enable Nikto's DoS tuning category.
+    tuning: "123456789abcde"
+  enum4linux:
+    enabled: true
+    binary: enum4linux-ng
+    timeout: 600
+  greenbone:
+    enabled: true
+    mode: socket
+    socket: "/run/gvmd/gvmd.sock"
+    username_env: "POLYMER_GVM_USERNAME"
+    password_env: "POLYMER_GVM_PASSWORD"
+    scan_config_id: "daba56c8-73ec-11df-a475-002264764cea"
+    scanner_id: "08b69003-5fc2-4037-a479-93b440211c73"
+    poll_interval: 15
+    task_timeout: 7200

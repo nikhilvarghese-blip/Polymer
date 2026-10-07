@@ -1,0 +1,2 @@
+[console_scripts]
+polymer = polymer.cli:app
