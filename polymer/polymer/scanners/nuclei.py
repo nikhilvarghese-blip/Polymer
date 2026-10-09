@@ -66,7 +66,9 @@ class NucleiScanner(Scanner):
             argv += ["-severity", ",".join(severity)]
         for target in targets:
             argv += ["-u", target]
-        proc = run_command(argv, timeout=int(self.config.get("timeout", 600)))
+        proc = run_command(
+            argv, timeout=self.timeout(float(self.config.get("timeout", 600)))
+        )
         if proc.returncode != 0 and not outfile.exists():
             return ToolResult(tool=self.name, status="failed", message=proc.stderr.strip() or "nuclei failed")
 

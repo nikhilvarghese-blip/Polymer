@@ -19,7 +19,7 @@ class Enum4LinuxScanner(Scanner):
         if not smb_present(asset): return ToolResult(tool=self.name,status="not_applicable",message="no SMB service detected")
         base=self.workdir / asset.ip
         cmd=[self.config.get("binary","enum4linux-ng"),"-As","-oJ",str(base),asset.ip]
-        proc=run_command(cmd,timeout=int(self.config.get("timeout",600)))
+        proc=run_command(cmd,timeout=self.timeout(float(self.config.get("timeout",600))))
         candidates=[base.with_suffix('.json'), self.workdir / f"{asset.ip}.json"]
         outfile=next((p for p in candidates if p.exists()),None)
         if outfile is None:

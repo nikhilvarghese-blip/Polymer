@@ -25,7 +25,7 @@ class NiktoScanner(Scanner):
             tuning=self.config.get("tuning")
             if tuning: cmd += ["-Tuning", str(tuning)]
             try:
-                proc=run_command(cmd,timeout=int(self.config.get("timeout",900)))
+                proc=run_command(cmd,timeout=self.timeout(float(self.config.get("timeout",900))))
             except CommandExecutionError as exc:
                 errors.append(f"{url}: {exc}")
                 continue

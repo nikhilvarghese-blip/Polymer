@@ -18,7 +18,7 @@ class WazuhSCAScanner(Scanner):
         base = self.config["url"].rstrip("/")
         user = os.environ[self.config.get("username_env", "POLYMER_WAZUH_USERNAME")]
         password = os.environ[self.config.get("password_env", "POLYMER_WAZUH_PASSWORD")]
-        response = s.post(f"{base}/security/user/authenticate", auth=(user, password), timeout=30)
+        response = s.post(f"{base}/security/user/authenticate", auth=(user, password), timeout=self.timeout(30))
         response.raise_for_status()
         token = response.json()["data"]["token"]
         s.headers.update({"Authorization": f"Bearer {token}"})
@@ -29,14 +29,14 @@ class WazuhSCAScanner(Scanner):
             return ToolResult(tool=self.name, status="unavailable", message="Wazuh API config/credentials unavailable")
         try:
             s, base = self._session()
-            r = s.get(f"{base}/agents", params={"q": f"ip={asset.ip}", "limit": 50}, timeout=30)
+            r = s.get(f"{base}/agents", params={"q": f"ip={asset.ip}", "limit": 50}, timeout=self.timeout(30))
             r.raise_for_status()
             agents = r.json().get("data", {}).get("affected_items", [])
             if not agents:
                 return ToolResult(tool=self.name, status="not_applicable", message="no Wazuh agent matched this IP")
 
             agent_id = str(agents[0]["id"])
-            policies_resp = s.get(f"{base}/sca/{agent_id}", timeout=30)
+            policies_resp = s.get(f"{base}/sca/{agent_id}", timeout=self.timeout(30))
             policies_resp.raise_for_status()
             policies = policies_resp.json().get("data", {}).get("affected_items", [])
             findings: list[Finding] = []
@@ -44,7 +44,7 @@ class WazuhSCAScanner(Scanner):
                 policy_id = str(policy.get("policy_id") or policy.get("id") or "")
                 if not policy_id:
                     continue
-                checks_resp = s.get(f"{base}/sca/{agent_id}/checks/{policy_id}", timeout=30)
+                checks_resp = s.get(f"{base}/sca/{agent_id}/checks/{policy_id}", timeout=self.timeout(30))
                 checks_resp.raise_for_status()
                 checks = checks_resp.json().get("data", {}).get("affected_items", [])
                 for check in checks:

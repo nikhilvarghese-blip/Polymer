@@ -29,7 +29,9 @@ class NmapScanner(Scanner):
                 message="nmap arguments must be a list of strings",
             )
         args = [self.config.get("binary", "nmap"), *arguments, "-oX", str(outfile), asset.ip]
-        proc = run_command(args, timeout=int(self.config.get("timeout", 1800)))
+        proc = run_command(
+            args, timeout=self.timeout(float(self.config.get("timeout", 1800)))
+        )
         if proc.returncode != 0 or not outfile.exists():
             return ToolResult(tool=self.name, status="failed", message=proc.stderr.strip() or "nmap failed")
 

@@ -1,6 +1,8 @@
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
 
 from polymer.core.orchestrator import Orchestrator
+from polymer.core.timing import ScanWindow
 
 
 def test_discovery_failure_is_preserved_and_emits_progress(tmp_path: Path, monkeypatch):
@@ -47,3 +49,28 @@ def test_scanner_failure_does_not_abort_remaining_orchestration(tmp_path: Path, 
     asset = orchestrator.scan_discovered_asset(Asset(ip="10.0.0.2", status="up"))
     assert asset.tools["greenbone"].status == "failed"
     assert "OSError: scanner fixture failure" in asset.tools["greenbone"].message
+
+
+def test_expired_scan_window_does_not_start_discovery(tmp_path: Path, monkeypatch):
+    now = datetime.now(timezone.utc)
+    events = []
+    orchestrator = Orchestrator(
+        {"scan": {"nmap": {"enabled": True}}},
+        tmp_path,
+        progress_callback=events.append,
+        scan_window=ScanWindow(now - timedelta(minutes=2), now - timedelta(minutes=1)),
+    )
+
+    def must_not_run(_asset):
+        raise AssertionError("expired scanner was started")
+
+    monkeypatch.setattr(orchestrator.nmap, "run", must_not_run)
+    asset = orchestrator.scan_asset("10.0.0.3")
+
+    assert asset.tools["nmap"].status == "skipped"
+    assert "end time reached" in asset.tools["nmap"].message
+    assert [event.kind for event in events] == [
+        "scanner_completed",
+        "scan_planned",
+        "asset_completed",
+    ]

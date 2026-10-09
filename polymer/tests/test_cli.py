@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 
 import yaml
 from typer.testing import CliRunner
@@ -59,6 +60,13 @@ def test_scan_shows_overall_progress_and_writes_reports(tmp_path: Path):
     assert (run_dir / "scanner_status.csv").exists()
     assert (run_dir / "raw_findings.csv").exists()
     assert (run_dir / "by_ip" / "10.0.0.1" / "report.csv").exists()
+    scan_log = run_dir / "scan.log"
+    assert scan_log.exists()
+    events = [json.loads(line)["event"] for line in scan_log.read_text().splitlines()]
+    assert events[0] == "run_started"
+    assert "scanner_started" in events
+    assert "asset_completed" in events
+    assert events[-1] == "run_completed"
 
 
 def test_fail_on_tool_error_returns_status_two(tmp_path: Path):

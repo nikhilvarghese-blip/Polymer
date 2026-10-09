@@ -21,6 +21,7 @@ class ScanEvent:
     asset_ip: str
     scanner: str | None = None
     scanner_total: int | None = None
+    scanners: tuple[str, ...] | None = None
     result: ToolResult | None = None
 
 

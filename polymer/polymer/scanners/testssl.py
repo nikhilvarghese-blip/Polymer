@@ -25,7 +25,7 @@ class TestSSLScanner(Scanner):
             outfile=self.workdir / f"{asset.ip}_{port}.json"
             cmd=[self.config.get("binary","testssl"),"--quiet","--warnings","batch","--jsonfile",str(outfile),f"{asset.ip}:{port}"]
             try:
-                proc=run_command(cmd,timeout=int(self.config.get("timeout",600)))
+                proc=run_command(cmd,timeout=self.timeout(float(self.config.get("timeout",600))))
             except CommandExecutionError as exc:
                 errors.append(f"{asset.ip}:{port}: {exc}")
                 continue

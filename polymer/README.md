@@ -230,9 +230,25 @@ polymer scan \
   --profile standard
 ~~~
 
+In an interactive terminal, Polymer displays the NTP-backed server time and
+prompts for the scan end time in 24-hour **HH:MM** format. The command start is
+captured when `polymer scan` begins. If the requested time has already passed
+on that server day, Polymer uses the same time on the following day. For an
+unattended run, provide the deadline explicitly:
+
+~~~bash
+polymer scan --targets targets.txt --config config/polymer.yaml --end-time 18:30
+~~~
+
+The deadline controls scanner work: Polymer does not start another scanner or
+target after it expires, and external scanner timeouts are capped to the time
+remaining. Correlation and report writing still finish so partial results are
+preserved. Every new scan command creates a fresh timer.
+
 Useful scan options:
 
 - **--baseline PATH** compares results with an earlier **polymer.json**.
+- **--end-time HH:MM** supplies the server-local scan deadline without a prompt.
 - **--no-intelligence** skips correlation and external enrichment.
 - **--fail-on-tool-error** returns exit status 2 if a selected scanner fails or
   is unavailable.
@@ -266,6 +282,7 @@ Each scan receives a unique UTC-timestamped directory:
 
 ~~~text
 output/run-<UTC timestamp>/
+├── scan.log                  # JSON-lines run/IP/scanner timeline and errors
 ├── polymer.json              # complete normalized result keyed by IP
 ├── polymer.csv               # canonical final findings report
 ├── analysis.json             # correlated risk report
@@ -291,6 +308,11 @@ output/run-<UTC timestamp>/
 findings otherwise. **raw_findings.csv** always preserves scanner-level
 evidence. Targets without findings receive an explicit summary row, while
 **assets.csv** guarantees exactly one row for every requested IP.
+
+**scan.log** is flushed after every event. It records the command start and
+deadline, NTP synchronization state, each IP and scanner start/finish timestamp,
+elapsed seconds, status, finding count, raw artifact path, error/message text,
+scanners triggered per IP, and targets not started before the deadline.
 
 Important report fields include:
 

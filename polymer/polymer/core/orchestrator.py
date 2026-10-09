@@ -4,6 +4,7 @@ from pathlib import Path
 
 from polymer.core.events import ProgressCallback, ScanEvent
 from polymer.core.dispatcher import ScannerDispatcher
+from polymer.core.timing import ScanWindow
 from polymer.models.schema import Asset, ToolResult
 from polymer.scanners.nmap import NmapScanner
 from polymer.scanners.registry import ScannerRegistry
@@ -16,12 +17,16 @@ class Orchestrator:
         run_dir: Path,
         profile_tools: set[str] | None = None,
         progress_callback: ProgressCallback | None = None,
+        scan_window: ScanWindow | None = None,
     ):
         self.config = config
         self.progress_callback = progress_callback
+        self.scan_window = scan_window
         scan = config.get("scan", {})
-        self.nmap = NmapScanner(scan.get("nmap", {}), run_dir / "raw" / "nmap")
-        self.registry = ScannerRegistry(config, run_dir)
+        self.nmap = NmapScanner(
+            scan.get("nmap", {}), run_dir / "raw" / "nmap", scan_window
+        )
+        self.registry = ScannerRegistry(config, run_dir, scan_window)
         self.dispatcher = ScannerDispatcher(config, profile_tools)
 
     def _emit(self, event: ScanEvent) -> None:
@@ -30,6 +35,15 @@ class Orchestrator:
 
     def discover_asset(self, ip: str) -> Asset:
         asset = Asset(ip=ip)
+        if self.scan_window is not None and self.scan_window.expired():
+            result = ToolResult(
+                tool="nmap",
+                status="skipped",
+                message="scan end time reached before discovery started",
+            )
+            asset.tools["nmap"] = result
+            self._emit(ScanEvent("scanner_completed", ip, scanner="nmap", result=result))
+            return asset
         self._emit(ScanEvent("scanner_started", ip, scanner="nmap"))
         if not self.config.get("scan", {}).get("nmap", {}).get("enabled", True):
             result = ToolResult(tool="nmap", status="skipped", message="nmap disabled")
@@ -59,9 +73,26 @@ class Orchestrator:
                 "scan_planned",
                 asset.ip,
                 scanner_total=1 + len(scanner_names),
+                scanners=("nmap", *scanner_names),
             )
         )
         for scanner_name in scanner_names:
+            if self.scan_window is not None and self.scan_window.expired():
+                result = ToolResult(
+                    tool=scanner_name,
+                    status="skipped",
+                    message="scan end time reached before scanner started",
+                )
+                asset.tools[scanner_name] = result
+                self._emit(
+                    ScanEvent(
+                        "scanner_completed",
+                        asset.ip,
+                        scanner=scanner_name,
+                        result=result,
+                    )
+                )
+                continue
             self._emit(ScanEvent("scanner_started", asset.ip, scanner=scanner_name))
             try:
                 scanner = self.registry.get(scanner_name)
@@ -88,6 +119,13 @@ class Orchestrator:
         if asset.status == "up":
             self.scan_discovered_asset(asset)
         else:
-            self._emit(ScanEvent("scan_planned", ip, scanner_total=1))
+            self._emit(
+                ScanEvent(
+                    "scan_planned",
+                    ip,
+                    scanner_total=1,
+                    scanners=("nmap",),
+                )
+            )
         self._emit(ScanEvent("asset_completed", ip))
         return asset

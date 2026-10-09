@@ -8,7 +8,7 @@ class CommandExecutionError(RuntimeError):
     """Raised when a scanner process cannot be started or exceeds its deadline."""
 
 
-def run_command(argv: list[str], timeout: int = 1800, cwd: Path | None = None) -> subprocess.CompletedProcess:
+def run_command(argv: list[str], timeout: float = 1800, cwd: Path | None = None) -> subprocess.CompletedProcess:
     if not argv or not argv[0]:
         raise CommandExecutionError("scanner command is empty")
     if timeout <= 0:

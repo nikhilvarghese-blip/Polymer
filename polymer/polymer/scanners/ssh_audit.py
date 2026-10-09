@@ -27,7 +27,7 @@ class SSHAuditScanner(Scanner):
         for port in ports:
             outfile = self.workdir / f"{asset.ip}_{port}.json"
             try:
-                proc = run_command([self.config.get("binary", "ssh-audit"), "-j", f"{asset.ip}:{port}"], timeout=int(self.config.get("timeout", 120)))
+                proc = run_command([self.config.get("binary", "ssh-audit"), "-j", f"{asset.ip}:{port}"], timeout=self.timeout(float(self.config.get("timeout", 120))))
             except CommandExecutionError as exc:
                 errors.append(f"{asset.ip}:{port}: {exc}")
                 continue

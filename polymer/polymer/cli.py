@@ -5,6 +5,7 @@ from functools import wraps
 from pathlib import Path
 import os
 import shutil
+import sys
 from typing import Any, Callable, TypeVar, cast
 
 import click
@@ -23,8 +24,10 @@ from rich.progress import (
 from rich.table import Table
 
 from polymer.core.events import ScanEvent
+from polymer.core.audit import ScanAuditLog
 from polymer.core.targets import parse_targets
 from polymer.core.orchestrator import Orchestrator
+from polymer.core.timing import ScanWindow, ntp_sync_status, resolve_end_time, server_now
 from polymer.intelligence.correlation import CorrelationEngine
 from polymer.intelligence.delta import compare_assets
 from polymer.intelligence.enrichment import VulnerabilityIntelligence
@@ -132,6 +135,45 @@ def run_directory(config: dict, prefix: str) -> Path:
 
 def utc_run_stamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+
+
+def scan_window(started_at: datetime, end_time: str | None) -> tuple[ScanWindow, bool | None]:
+    """Build the scan window, prompting only when attached to a terminal."""
+
+    ntp_status = ntp_sync_status()
+    server_zone = started_at.tzname() or str(started_at.tzinfo)
+    value = end_time
+    if value is None and sys.stdin.isatty():
+        console.print(
+            f"[cyan]Server time:[/cyan] {started_at:%Y-%m-%d %H:%M:%S} "
+            f"{server_zone} (NTP synchronized: "
+            f"{'yes' if ntp_status is True else 'no' if ntp_status is False else 'unknown'})"
+        )
+        value = typer.prompt(
+            f"Scan end time in server {server_zone} (HH:MM; earlier times mean tomorrow)"
+        )
+    elif value is None:
+        console.print(
+            "[yellow]No interactive terminal detected; scan deadline is disabled. "
+            "Use --end-time HH:MM for unattended runs.[/yellow]"
+        )
+
+    end_at = None
+    if value is not None:
+        try:
+            end_at = resolve_end_time(value, started_at)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc), param_hint="--end-time") from exc
+        console.print(
+            f"[cyan]Scan window:[/cyan] {started_at:%Y-%m-%d %H:%M:%S %Z} "
+            f"to {end_at:%Y-%m-%d %H:%M:%S %Z}"
+        )
+    if ntp_status is False:
+        console.print(
+            "[bold yellow]Warning:[/bold yellow] the server reports that its clock "
+            "is not currently NTP-synchronized."
+        )
+    return ScanWindow(started_at=started_at, end_at=end_at), ntp_status
 
 
 def progress_display() -> Progress:
@@ -385,6 +427,11 @@ def scan(
     config: Path = typer.Option(Path("config/polymer.yaml"), exists=True, readable=True),
     profile: str | None = typer.Option(None),
     baseline: Path | None = typer.Option(None, exists=True, readable=True, help="Optional earlier polymer.json for new/resolved comparison"),
+    end_time: str | None = typer.Option(
+        None,
+        "--end-time",
+        help="Scan deadline as HH:MM in the server timezone; prompted in a terminal.",
+    ),
     no_intelligence: bool = typer.Option(False, "--no-intelligence", help="Skip Phase 3 correlation/enrichment"),
     fail_on_tool_error: bool = typer.Option(
         False,
@@ -392,11 +439,13 @@ def scan(
         help="Exit with status 2 if any selected scanner fails or is unavailable.",
     ),
 ):
+    command_started_at = server_now()
     cfg = load_config(config)
     scope = cfg.get("scope", {})
     values = parse_targets(targets, int(scope.get("max_expanded_hosts", 4096)), bool(scope.get("allow_public_ips", False)))
     if baseline and no_intelligence:
         raise ValueError("--baseline cannot be combined with --no-intelligence")
+    window, ntp_status = scan_window(command_started_at, end_time)
     run_dir = run_directory(cfg, "run")
     selected_profile = load_profile(cfg, profile, config)
     intelligence_enabled = (
@@ -406,58 +455,89 @@ def scan(
     delta = None
     partial_report = run_dir / "polymer.partial.json"
     total_steps = len(values) + int(intelligence_enabled) + 1
-    with progress_display() as progress:
-        overall = progress.add_task("[magenta]Overall scan[/magenta]", total=total_steps)
-        detail = progress.add_task("", total=1, visible=False)
-        scan_progress = ScanProgress(progress, detail)
-        orch = Orchestrator(
-            cfg,
-            run_dir,
-            selected_profile,
-            progress_callback=scan_progress,
-        )
+    deadline_reached = False
+    with ScanAuditLog(
+        run_dir / "scan.log",
+        started_at=command_started_at,
+        end_at=window.end_at,
+        ntp_synchronized=ntp_status,
+        target_count=len(values),
+    ) as audit:
+        with progress_display() as progress:
+            overall = progress.add_task("[magenta]Overall scan[/magenta]", total=total_steps)
+            detail = progress.add_task("", total=1, visible=False)
+            scan_progress = ScanProgress(progress, detail)
 
-        for number, ip in enumerate(values, start=1):
-            scan_progress.begin_asset(ip)
-            assets.append(orch.scan_asset(ip))
-            # Keep an atomic checkpoint so a long run remains debuggable after
-            # interruption or a later scanner/reporting failure.
-            write_ip_grouped_report(assets, partial_report)
-            progress.advance(overall)
-            progress.update(
-                overall,
-                description=(
-                    f"[magenta]Overall scan[/magenta] "
-                    f"[cyan]{number}/{len(values)} targets[/cyan]"
-                ),
+            def record_event(event: ScanEvent) -> None:
+                scan_progress(event)
+                audit(event)
+
+            orch = Orchestrator(
+                cfg,
+                run_dir,
+                selected_profile,
+                progress_callback=record_event,
+                scan_window=window,
             )
 
-        progress.update(detail, visible=False)
-        if intelligence_enabled:
+            for number, ip in enumerate(values, start=1):
+                if window.expired():
+                    deadline_reached = True
+                    reason = "scan end time reached before target could start"
+                    for remaining_ip in values[number - 1:]:
+                        audit.target_not_started(remaining_ip, reason)
+                    break
+                scan_progress.begin_asset(ip)
+                audit.begin_asset(ip)
+                assets.append(orch.scan_asset(ip))
+                # Keep an atomic checkpoint so a long run remains debuggable after
+                # interruption or a later scanner/reporting failure.
+                write_ip_grouped_report(assets, partial_report)
+                progress.advance(overall)
+                progress.update(
+                    overall,
+                    description=(
+                        f"[magenta]Overall scan[/magenta] "
+                        f"[cyan]{number}/{len(values)} targets[/cyan]"
+                    ),
+                )
+
+            deadline_reached = deadline_reached or window.expired()
+            progress.update(detail, visible=False)
+            if intelligence_enabled:
+                audit.phase("correlation_and_intelligence", "started")
+                progress.update(
+                    overall,
+                    description="[magenta]Overall[/magenta] [yellow]correlation & intelligence[/yellow]",
+                )
+                engine = build_engine(cfg, run_dir)
+                engine.analyze_assets(assets)
+                write_analysis_report(assets, run_dir / "analysis.json")
+                if baseline:
+                    baseline_assets = load_assets(baseline)
+                    engine.analyze_assets(baseline_assets)
+                    delta = compare_assets(assets, baseline_assets)
+                    write_delta_report(delta, run_dir / "delta.json")
+                progress.advance(overall)
+                audit.phase("correlation_and_intelligence", "completed")
+
+            audit.phase("reporting", "started")
             progress.update(
                 overall,
-                description="[magenta]Overall[/magenta] [yellow]correlation & intelligence[/yellow]",
+                description="[magenta]Overall[/magenta] [blue]writing reports[/blue]",
             )
-            engine = build_engine(cfg, run_dir)
-            engine.analyze_assets(assets)
-            write_analysis_report(assets, run_dir / "analysis.json")
-            if baseline:
-                baseline_assets = load_assets(baseline)
-                engine.analyze_assets(baseline_assets)
-                delta = compare_assets(assets, baseline_assets)
-                write_delta_report(delta, run_dir / "delta.json")
+            write_ip_grouped_report(assets, run_dir / "polymer.json")
+            write_per_ip(assets, run_dir / "by_ip")
+            write_csv_reports(assets, run_dir)
+            partial_report.unlink(missing_ok=True)
             progress.advance(overall)
-
-        progress.update(
-            overall,
-            description="[magenta]Overall[/magenta] [blue]writing reports[/blue]",
+            audit.phase("reporting", "completed")
+            progress.update(overall, description="[green]Polymer scan complete[/green]")
+        audit.finish(
+            "deadline_reached" if deadline_reached else "completed",
+            targets_scanned=len(assets),
+            targets_not_started=len(values) - len(assets),
         )
-        write_ip_grouped_report(assets, run_dir / "polymer.json")
-        write_per_ip(assets, run_dir / "by_ip")
-        write_csv_reports(assets, run_dir)
-        partial_report.unlink(missing_ok=True)
-        progress.advance(overall)
-        progress.update(overall, description="[green]Polymer scan complete[/green]")
 
     if delta:
         console.print(
@@ -491,6 +571,12 @@ def scan(
         print_analysis_summary(assets)
     console.print(f"[green]Results:[/green] {run_dir}")
     console.print(f"[green]CSV report:[/green] {run_dir / 'polymer.csv'}")
+    console.print(f"[green]Detailed scan log:[/green] {run_dir / 'scan.log'}")
+    if deadline_reached:
+        console.print(
+            f"[yellow]Scan deadline reached; {len(values) - len(assets)} "
+            "target(s) were not started.[/yellow]"
+        )
     tool_errors = [
         (asset.ip, name, result.status)
         for asset in assets
