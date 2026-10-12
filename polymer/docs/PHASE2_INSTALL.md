@@ -13,7 +13,26 @@ source .venv/bin/activate
 polymer doctor --config config/polymer.yaml
 ```
 
-The installer installs Nmap, Nikto, testssl.sh and enum4linux-ng from Kali packages, installs Polymer in a Python venv, and installs ssh-audit in that venv. It attempts the Kali Nuclei package but leaves a clear warning if Nuclei is unavailable.
+The installer installs Nmap, Nikto, testssl.sh and enum4linux-ng from Kali
+packages, installs Polymer in a Python venv, and installs ssh-audit in that
+venv. It also installs the pinned upstream Kiterunner release and the small
+contextual API route dataset. It attempts the Kali Nuclei package but leaves a
+clear warning if Nuclei is unavailable.
+
+Kiterunner can also be installed or repaired independently:
+
+```bash
+./scripts/install-kiterunner.sh
+polymer doctor --config config/polymer.yaml
+```
+
+For authenticated API discovery and vulnerability assessment, export a JSON
+object of request headers. Polymer supplies the values to both Kiterunner and
+Nuclei and does not log them:
+
+```bash
+export POLYMER_API_HEADERS='{"Authorization":"Bearer TOKEN","X-API-Key":"VALUE"}'
+```
 
 ## Optional Greenbone / OpenVAS
 
@@ -60,4 +79,4 @@ polymer plan --targets targets.txt --config config/polymer.yaml --profile standa
 polymer scan --targets targets.txt --config config/polymer.yaml --profile standard
 ```
 
-Profiles: `quick`, `standard`, `web`, `infrastructure`, `full`.
+Profiles: `quick`, `api`, `standard`, `web`, `infrastructure`, `full`.

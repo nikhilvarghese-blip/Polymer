@@ -276,7 +276,7 @@ def doctor(config: Path = typer.Option(Path("config/polymer.yaml"), exists=True,
     table.add_column("State")
     table.add_column("Details")
     binaries = {
-        "nmap": "nmap", "nuclei": "nuclei", "ssh_audit": "ssh-audit",
+        "nmap": "nmap", "kiterunner": "kr", "nuclei": "nuclei", "ssh_audit": "ssh-audit",
         "testssl": "testssl", "nikto": "nikto", "enum4linux": "enum4linux-ng",
     }
     for key, default in binaries.items():
@@ -286,6 +286,19 @@ def doctor(config: Path = typer.Option(Path("config/polymer.yaml"), exists=True,
             continue
         binary = scfg.get("binary", default)
         found = shutil.which(binary)
+        if key == "kiterunner" and found:
+            wordlist = Path(
+                scfg.get(
+                    "wordlist", "/usr/local/share/kiterunner/routes-small.kite"
+                )
+            )
+            state = "[green]ready[/green]" if wordlist.is_file() else "[red]incomplete[/red]"
+            table.add_row(
+                key,
+                state,
+                f"binary={found}; wordlist={wordlist} ({'found' if wordlist.is_file() else 'missing'})",
+            )
+            continue
         state = "[green]ready[/green]" if found else "[red]missing[/red]"
         table.add_row(key, state, found or f"{binary} not found in PATH")
 

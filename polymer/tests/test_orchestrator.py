@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 from polymer.core.orchestrator import Orchestrator
 from polymer.core.timing import ScanWindow
+from polymer.models.schema import Asset, Service, ToolResult
 
 
 def test_discovery_failure_is_preserved_and_emits_progress(tmp_path: Path, monkeypatch):
@@ -44,8 +45,6 @@ def test_scanner_failure_does_not_abort_remaining_orchestration(tmp_path: Path, 
             raise OSError("scanner fixture failure")
 
     monkeypatch.setattr(orchestrator.registry, "get", lambda _name: BrokenScanner())
-    from polymer.models.schema import Asset
-
     asset = orchestrator.scan_discovered_asset(Asset(ip="10.0.0.2", status="up"))
     assert asset.tools["greenbone"].status == "failed"
     assert "OSError: scanner fixture failure" in asset.tools["greenbone"].message
@@ -74,3 +73,45 @@ def test_expired_scan_window_does_not_start_discovery(tmp_path: Path, monkeypatc
         "scan_planned",
         "asset_completed",
     ]
+
+
+def test_kiterunner_failure_does_not_prevent_nuclei_fallback(tmp_path: Path, monkeypatch):
+    orchestrator = Orchestrator(
+        {
+            "scan": {
+                "nmap": {"enabled": False},
+                "kiterunner": {"enabled": True},
+                "nuclei": {"enabled": True},
+            }
+        },
+        tmp_path,
+    )
+    calls = []
+
+    class FixtureScanner:
+        def __init__(self, name):
+            self.name = name
+
+        def run(self, asset):
+            calls.append(self.name)
+            if self.name == "kiterunner":
+                raise RuntimeError("Kiterunner fixture failure")
+            assert asset.tools["kiterunner"].status == "failed"
+            return ToolResult(tool=self.name, status="completed")
+
+    monkeypatch.setattr(
+        orchestrator.registry,
+        "get",
+        lambda name: FixtureScanner(name),
+    )
+    asset = Asset(
+        ip="10.0.0.4",
+        status="up",
+        services=[Service(port=443, name="https")],
+    )
+
+    orchestrator.scan_discovered_asset(asset)
+
+    assert calls == ["kiterunner", "nuclei"]
+    assert asset.tools["kiterunner"].status == "failed"
+    assert asset.tools["nuclei"].status == "completed"

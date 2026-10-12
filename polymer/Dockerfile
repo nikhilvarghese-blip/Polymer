@@ -10,5 +10,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 COPY . /app
-RUN python3 -m pip install --break-system-packages .
+RUN /app/scripts/install-kiterunner.sh \
+    && python3 -m pip install --break-system-packages .
 ENTRYPOINT ["polymer"]

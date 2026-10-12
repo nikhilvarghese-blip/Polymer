@@ -9,6 +9,8 @@ fi
 sudo apt-get update
 sudo apt-get install -y python3 python3-venv python3-pip nmap git curl ca-certificates
 
+./scripts/install-kiterunner.sh
+
 if ! command -v nuclei >/dev/null 2>&1; then
   sudo apt-get install -y nuclei || true
 fi

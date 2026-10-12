@@ -16,7 +16,11 @@ class ScannerDispatcher:
     def _enabled(self, key: str) -> bool:
         cfg = self.config.get("scan", {}).get(key, {})
         enabled = bool(cfg.get("enabled", False))
-        if self.profile_tools is not None and key not in self.profile_tools and key.replace("_sca", "wazuh") not in self.profile_tools:
+        if (
+            self.profile_tools is not None
+            and key not in self.profile_tools
+            and key.replace("_sca", "wazuh") not in self.profile_tools
+        ):
             return False
         return enabled
 
@@ -26,6 +30,9 @@ class ScannerDispatcher:
         selected: list[str] = []
         if self._enabled("wazuh"):
             selected.append("wazuh_sca")
+        # API discovery must run before Nuclei so its routes become VA targets.
+        if self._enabled("kiterunner") and web_endpoints(asset):
+            selected.append("kiterunner")
         if self._enabled("nuclei") and web_endpoints(asset):
             selected.append("nuclei")
         if self._enabled("nikto") and web_endpoints(asset):

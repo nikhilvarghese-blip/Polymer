@@ -3,7 +3,21 @@ from polymer.models.schema import Asset, Service
 
 
 def cfg():
-    return {"scan": {k:{"enabled":True} for k in ["nuclei","wazuh","ssh_audit","testssl","nikto","enum4linux","greenbone"]}}
+    return {
+        "scan": {
+            key: {"enabled": True}
+            for key in [
+                "kiterunner",
+                "nuclei",
+                "wazuh",
+                "ssh_audit",
+                "testssl",
+                "nikto",
+                "enum4linux",
+                "greenbone",
+            ]
+        }
+    }
 
 
 def test_ssh_routes_ssh_audit():
@@ -15,7 +29,8 @@ def test_ssh_routes_ssh_audit():
 def test_https_routes_web_tools():
     a=Asset(ip="10.0.0.2",status="up",services=[Service(port=443,name="https")])
     s=ScannerDispatcher(cfg()).scanners_for_asset(a)
-    assert {"nuclei","nikto","testssl"}.issubset(set(s))
+    assert {"kiterunner","nuclei","nikto","testssl"}.issubset(set(s))
+    assert s.index("kiterunner") < s.index("nuclei")
 
 
 def test_smb_routes_enum4linux():

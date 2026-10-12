@@ -6,6 +6,7 @@ services:
       - ./targets.txt:/app/targets.txt:ro
       - ./output:/app/output
     environment:
+      POLYMER_API_HEADERS: ${POLYMER_API_HEADERS:-}
       POLYMER_WAZUH_USERNAME: ${POLYMER_WAZUH_USERNAME:-}
       POLYMER_WAZUH_PASSWORD: ${POLYMER_WAZUH_PASSWORD:-}
     command: ["scan", "--targets", "/app/targets.txt", "--config", "/app/config/polymer.yaml"]

@@ -1,14 +1,17 @@
 quick:
   scanners: [nmap, nuclei]
 
+api:
+  scanners: [nmap, kiterunner, nuclei]
+
 standard:
-  scanners: [nmap, nuclei, wazuh, ssh_audit, testssl, nikto, enum4linux]
+  scanners: [nmap, kiterunner, nuclei, wazuh, ssh_audit, testssl, nikto, enum4linux]
 
 full:
-  scanners: [nmap, nuclei, wazuh, ssh_audit, testssl, nikto, enum4linux, greenbone]
+  scanners: [nmap, kiterunner, nuclei, wazuh, ssh_audit, testssl, nikto, enum4linux, greenbone]
 
 web:
-  scanners: [nmap, nuclei, nikto, testssl]
+  scanners: [nmap, kiterunner, nuclei, nikto, testssl]
 
 infrastructure:
   scanners: [nmap, wazuh, ssh_audit, testssl, enum4linux, greenbone]

@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import ipaddress
 import json
 import shutil
 from urllib.parse import urlsplit
+
+from polymer.core.http_headers import api_headers
+from polymer.core.services import web_endpoints
 from polymer.models.schema import Asset, Finding, ToolResult
 from polymer.scanners.base import Scanner
 from polymer.utils.command import run_command
@@ -13,6 +17,64 @@ class NucleiScanner(Scanner):
 
     def available(self) -> bool:
         return shutil.which(self.config.get("binary", "nuclei")) is not None
+
+    @staticmethod
+    def _in_scope_url(value: object, asset_ip: str) -> str | None:
+        if not isinstance(value, str) or not value:
+            return None
+        try:
+            parsed = urlsplit(value)
+            if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+                return None
+            if ipaddress.ip_address(parsed.hostname) != ipaddress.ip_address(asset_ip):
+                return None
+        except (TypeError, ValueError):
+            return None
+        return value
+
+    def _targets(self, asset: Asset) -> tuple[list[str], set[str]]:
+        roots = [url for url, _port in web_endpoints(asset)]
+        discovered: list[str] = []
+        result = asset.tools.get("kiterunner")
+        if result is not None:
+            for finding in result.findings:
+                if finding.category != "api_discovery":
+                    continue
+                value = self._in_scope_url(finding.evidence.get("url"), asset.ip)
+                if value:
+                    discovered.append(value)
+        api_targets = set(discovered)
+        return list(dict.fromkeys([*roots, *discovered])), api_targets
+
+    @staticmethod
+    def _is_api_match(value: object, api_targets: set[str]) -> bool:
+        if not isinstance(value, str):
+            return False
+        try:
+            matched = urlsplit(value)
+        except ValueError:
+            return False
+        for target in api_targets:
+            try:
+                discovered = urlsplit(target)
+                matched_port = matched.port or (443 if matched.scheme == "https" else 80)
+                discovered_port = discovered.port or (
+                    443 if discovered.scheme == "https" else 80
+                )
+            except ValueError:
+                continue
+            if (
+                matched.scheme != discovered.scheme
+                or matched.hostname != discovered.hostname
+                or matched_port != discovered_port
+            ):
+                continue
+            discovered_path = discovered.path.rstrip("/") or "/"
+            if matched.path == discovered_path or matched.path.startswith(
+                discovered_path.rstrip("/") + "/"
+            ):
+                return True
+        return False
 
     @staticmethod
     def _matched_port(item: dict) -> int | None:
@@ -43,16 +105,22 @@ class NucleiScanner(Scanner):
         if asset.status != "up":
             return ToolResult(tool=self.name, status="skipped", message="asset is not up")
 
-        targets = []
-        for service in asset.services:
-            if service.name in {"http", "http-proxy", "https", "ssl/http"} or service.port in {80, 443, 8080, 8443}:
-                scheme = "https" if service.port in {443, 8443} or (service.name and "https" in service.name) else "http"
-                targets.append(f"{scheme}://{asset.ip}:{service.port}")
+        targets, api_targets = self._targets(asset)
         if not targets:
             return ToolResult(tool=self.name, status="not_applicable", message="no HTTP(S) services detected")
 
         outfile = self.workdir / f"{asset.ip}.jsonl"
-        argv = [self.config.get("binary", "nuclei"), "-silent", "-jsonl", "-o", str(outfile)]
+        target_file = self.workdir / f"{asset.ip}.targets.txt"
+        target_file.write_text("\n".join(targets) + "\n", encoding="utf-8")
+        argv = [
+            self.config.get("binary", "nuclei"),
+            "-silent",
+            "-jsonl",
+            "-o",
+            str(outfile),
+            "-l",
+            str(target_file),
+        ]
         severity = self.config.get("severity")
         if severity:
             if not isinstance(severity, list) or not all(
@@ -64,8 +132,12 @@ class NucleiScanner(Scanner):
                     message="nuclei severity must be a list of strings",
                 )
             argv += ["-severity", ",".join(severity)]
-        for target in targets:
-            argv += ["-u", target]
+        try:
+            headers = api_headers(self.config)
+        except ValueError as exc:
+            return ToolResult(tool=self.name, status="failed", message=str(exc))
+        for header in headers:
+            argv += ["-H", header]
         proc = run_command(
             argv, timeout=self.timeout(float(self.config.get("timeout", 600)))
         )
@@ -97,16 +169,19 @@ class NucleiScanner(Scanner):
                     severity = "unknown"
                 description = info.get("description")
                 remediation = info.get("remediation")
+                matched_at = item.get("matched-at") or item.get("host") or item.get("url")
+                api_match = self._is_api_match(matched_at, api_targets)
                 findings.append(Finding(
                     tool=self.name,
                     title=info.get("name") or item.get("template-id") or "Nuclei finding",
                     severity=severity,
-                    category="web",
+                    category="api" if api_match else "web",
                     port=self._matched_port(item),
                     protocol="tcp",
                     cve=[str(cve).upper() for cve in raw_cves if cve],
                     evidence={
-                        "matched_at": item.get("matched-at"),
+                        "matched_at": matched_at,
+                        "target_source": "kiterunner" if api_match else "service_discovery",
                         "template_id": item.get("template-id"),
                         "description": description if isinstance(description, str) else None,
                         "references": info.get("reference") or [],
@@ -120,7 +195,18 @@ class NucleiScanner(Scanner):
                 tool=self.name,
                 status="failed",
                 findings=findings,
-                raw_artifact=str(outfile) if outfile.exists() else None,
+                raw_artifact=(
+                    f"{outfile}, {target_file}" if outfile.exists() else str(target_file)
+                ),
                 message=proc.stderr.strip() or f"nuclei exited with code {proc.returncode}",
             )
-        return ToolResult(tool=self.name, status="completed", findings=findings, raw_artifact=str(outfile))
+        return ToolResult(
+            tool=self.name,
+            status="completed",
+            findings=findings,
+            raw_artifact=f"{outfile}, {target_file}",
+            message=(
+                f"scanned {len(targets)} URL target(s), including "
+                f"{len(api_targets)} Kiterunner-discovered API endpoint(s)"
+            ),
+        )

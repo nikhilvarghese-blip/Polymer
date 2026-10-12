@@ -8,7 +8,9 @@ scan:
   profile: standard
   concurrency: 1
   nmap: {enabled: true, binary: nmap, arguments: ["-Pn", "-sV", "--version-light"]}
-  nuclei: {enabled: true, binary: nuclei, timeout: 600, severity: ["critical", "high", "medium", "low", "info"]}
+  # Add force_method: GET to kiterunner for read-only discovery (reduced coverage).
+  kiterunner: {enabled: true, binary: kr, wordlist: "/usr/local/share/kiterunner/routes-small.kite", timeout: 900, request_timeout: "3s", max_connections_per_host: 3, max_redirects: 2, max_endpoints: 2000, fail_status_codes: [404], headers_env: "POLYMER_API_HEADERS"}
+  nuclei: {enabled: true, binary: nuclei, timeout: 600, severity: ["critical", "high", "medium", "low", "info"], headers_env: "POLYMER_API_HEADERS"}
   wazuh: {enabled: false, url: "https://127.0.0.1:55000", verify_tls: true, username_env: "POLYMER_WAZUH_USERNAME", password_env: "POLYMER_WAZUH_PASSWORD"}
   ssh_audit: {enabled: true, binary: ssh-audit, timeout: 120}
   testssl: {enabled: true, binary: testssl, timeout: 600}

@@ -7,7 +7,7 @@ overlapping findings, enriches known vulnerabilities, and produces reports
 organized by IP address.
 
 Polymer does not replace scanner engines. It provides a consistent workflow and
-data model across Nmap, Nuclei, Wazuh SCA, ssh-audit, testssl.sh, Nikto,
+data model across Nmap, Kiterunner, Nuclei, Wazuh SCA, ssh-audit, testssl.sh, Nikto,
 enum4linux-ng, and Greenbone/GVM.
 
 > Use Polymer only against systems you own or are explicitly authorized to
@@ -17,7 +17,7 @@ enum4linux-ng, and Greenbone/GVM.
 
 - IP and CIDR validation with private-address safeguards.
 - Nmap-led discovery and service-aware scanner selection.
-- Quick, web, infrastructure, standard, and full scan profiles.
+- Quick, API, web, infrastructure, standard, and full scan profiles.
 - Colored overall and per-scanner CLI progress.
 - Failure isolation so one scanner error does not discard the scan.
 - Cross-tool correlation and deduplication.
@@ -39,6 +39,8 @@ Targets file
     |       +-- Host status, ports, protocols, products and versions
     |
     +-- Adaptive scanner routing
+    |       +-- HTTP(S) -- Kiterunner API discovery
+    |       |                 +-- discovered routes feed Nuclei VA
     |       +-- HTTP(S) -- Nuclei and Nikto
     |       +-- TLS ----- testssl.sh
     |       +-- SSH ----- ssh-audit
@@ -60,6 +62,7 @@ results.
 | Integration | Purpose | Default |
 | --- | --- | --- |
 | Nmap | Host and service discovery | Enabled |
+| Kiterunner | Context-aware API endpoint discovery | Enabled |
 | Nuclei | Template-based web and service checks | Enabled |
 | Nikto | Web server assessment | Enabled |
 | testssl.sh | TLS configuration assessment | Enabled |
@@ -77,6 +80,7 @@ Use **polymer doctor** to see which configured dependencies are ready.
 - Python 3.11 or newer.
 - Linux is recommended; Kali Linux is the primary native environment.
 - External scanner binaries required by the selected profile.
+- Kiterunner's `routes-small.kite` API route dataset.
 - Network access and privileges appropriate for the authorized assessment.
 - Optional service credentials for Wazuh, Greenbone, and NVD.
 
@@ -93,9 +97,10 @@ cd polymer
 source .venv/bin/activate
 ~~~
 
-The installer creates a virtual environment, installs Polymer, and attempts to
-install the base discovery tools. Install any additional scanners required by
-your profile, then verify the environment:
+The installer creates a virtual environment, installs Polymer, installs the
+pinned and checksum-verified Kiterunner binary and API route dataset, and
+attempts to install the base discovery tools. Install any additional scanners
+required by your profile, then verify the environment:
 
 ~~~bash
 polymer doctor --config config/polymer.yaml
@@ -109,8 +114,16 @@ cd polymer
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
-python -m pip install -e .
+python -m pip install -r requirements.txt
 cp config/polymer.example.yaml config/polymer.yaml
+~~~
+
+`requirements.txt` installs Polymer's Python requirements. Kiterunner is a Go
+binary rather than a PyPI package; install its pinned upstream release and
+route dataset separately:
+
+~~~bash
+./scripts/install-kiterunner.sh
 ~~~
 
 For development dependencies:
@@ -167,6 +180,16 @@ scan:
     enabled: true
     binary: nmap
     arguments: ["-Pn", "-sV", "--version-light"]
+  kiterunner:
+    enabled: true
+    binary: kr
+    wordlist: /usr/local/share/kiterunner/routes-small.kite
+    max_connections_per_host: 3
+    fail_status_codes: [404]
+    headers_env: POLYMER_API_HEADERS
+  nuclei:
+    enabled: true
+    headers_env: POLYMER_API_HEADERS
 
 intelligence:
   enabled: true
@@ -180,6 +203,31 @@ Scanner-specific binary names, timeouts, connection details, and enablement
 flags are configured under **scan**. Keep secrets in environment variables
 rather than YAML files.
 
+### API discovery and vulnerability assessment
+
+For every discovered HTTP(S) service, Polymer runs Kiterunner before Nuclei.
+Kiterunner uses contextual routes, methods, parameters, and request bodies to
+identify API endpoints. Polymer normalizes those results as `api_discovery`
+observations and passes the original service URLs plus all in-scope discovered
+API URLs to Nuclei through a target file. Nuclei findings matched beneath those
+routes are categorized as `api` and retain `target_source: kiterunner` evidence.
+
+Protected `401` and `403` routes are intentionally retained as discovered APIs;
+only `404` is excluded by default. To perform an authenticated assessment,
+provide headers as a JSON object through the configured environment variable:
+
+~~~bash
+export POLYMER_API_HEADERS='{"Authorization":"Bearer TOKEN","X-API-Key":"VALUE"}'
+~~~
+
+The same headers are supplied to both Kiterunner and Nuclei without being
+written to configuration or scan logs. Tune Kiterunner concurrency and endpoint
+limits under `scan.kiterunner` to match the authorized target's capacity.
+Kiterunner's contextual dataset can send methods such as POST, PUT, PATCH, and
+DELETE with generated values. For targets where state changes are unacceptable,
+set `scan.kiterunner.force_method: GET`, understanding that this reduces
+method-specific API coverage.
+
 ### Scan profiles
 
 Profiles are defined in **config/profiles.yaml**:
@@ -187,6 +235,7 @@ Profiles are defined in **config/profiles.yaml**:
 | Profile | Intended use |
 | --- | --- |
 | quick | Discovery and lightweight Nuclei checks |
+| api | Focused Kiterunner discovery followed by Nuclei API VA |
 | standard | General-purpose assessment |
 | full | All configured scanners, including Greenbone |
 | web | Web and TLS-focused assessment |
@@ -194,6 +243,12 @@ Profiles are defined in **config/profiles.yaml**:
 
 Select a profile with **--profile**. If omitted, Polymer uses **scan.profile**
 from the configuration.
+
+For a focused API assessment, run:
+
+~~~bash
+polymer scan --targets targets.txt --config config/polymer.yaml --profile api
+~~~
 
 ## Commands
 
@@ -407,7 +462,8 @@ Greenbone is optional and can remain disabled when GVM is not installed.
 
 ## Docker
 
-The Docker image includes Polymer, Nmap, and Nuclei:
+The Docker image includes Polymer, Nmap, Kiterunner, its small API route dataset,
+and Nuclei:
 
 ~~~bash
 cp config/polymer.example.yaml config/polymer.yaml
@@ -447,6 +503,7 @@ Common checks:
 
 - Activate the virtual environment before running Polymer.
 - Confirm every enabled scanner is available in PATH.
+- Confirm `/usr/local/share/kiterunner/routes-small.kite` exists.
 - Verify scanner binary names and timeouts in **config/polymer.yaml**.
 - Confirm the selected profile contains the expected scanner.
 - Check that Wazuh and Greenbone credentials are exported.

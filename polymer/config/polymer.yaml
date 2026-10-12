@@ -13,11 +13,24 @@ scan:
     enabled: true
     binary: nmap
     arguments: ["-Pn", "-sV", "--version-light"]
+  kiterunner:
+    enabled: true
+    binary: kr
+    wordlist: "/usr/local/share/kiterunner/routes-small.kite"
+    timeout: 900
+    request_timeout: "3s"
+    max_connections_per_host: 3
+    max_redirects: 2
+    max_endpoints: 2000
+    fail_status_codes: [404]
+    headers_env: "POLYMER_API_HEADERS"
+    # Set force_method: GET for read-only discovery (with reduced API coverage).
   nuclei:
     enabled: true
     binary: nuclei
     timeout: 600
     severity: ["critical", "high", "medium", "low", "info"]
+    headers_env: "POLYMER_API_HEADERS"
   wazuh:
     enabled: false
     url: "https://127.0.0.1:55000"

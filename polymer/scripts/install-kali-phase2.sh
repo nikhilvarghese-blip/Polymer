@@ -10,6 +10,8 @@ echo "[+] Installing Polymer Phase 2 Kali dependencies"
 sudo apt update
 sudo apt install -y python3 python3-venv python3-pip pipx git curl ca-certificates nmap nikto testssl.sh enum4linux-ng
 
+./scripts/install-kiterunner.sh
+
 if ! command -v nuclei >/dev/null 2>&1; then
   echo "[+] Trying Kali package for nuclei"
   sudo apt install -y nuclei || true

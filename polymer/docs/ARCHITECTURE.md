@@ -12,12 +12,16 @@ Target parser / scope guard
       v
 Nmap discovery + service inventory
       |
-      +-----------------------+
-      |                       |
-Service-aware scanners    Host/config sources
-Nuclei, TLS, SSH, SMB     Wazuh SCA
-      |                       |
-      +-----------+-----------+
+      +-- HTTP(S): Kiterunner API route discovery
+      |                 |
+      |                 +-- service roots + in-scope API routes
+      |                                      |
+      |                                      v
+      |                               Nuclei API/web VA
+      |
+      +-- Other service-aware scanners: TLS, SSH, SMB, Greenbone
+      +-- Host/config sources: Wazuh SCA
+      |
                   v
           Normalized schema
                   |
@@ -35,6 +39,7 @@ Nuclei, TLS, SSH, SMB     Wazuh SCA
 - canonical Asset / Service / Finding / ToolResult models
 - Nmap adapter using XML
 - Nuclei adapter using JSONL
+- Kiterunner adapter using JSONL, with discovered API routes feeding Nuclei
 - Wazuh SCA adapter using the Wazuh REST API
 - per-IP and global JSON output
 - Kali install script, Python package, Dockerfile, Compose file
@@ -85,6 +90,13 @@ Exit criterion: predictable deployment from GitHub with documented upgrade and r
 
 ## Scanner contract
 Every adapter owns execution/retrieval and parsing, but returns the same `ToolResult`. Scanner-specific raw artifacts remain preserved under the run directory for evidence and debugging.
+
+Kiterunner and Nuclei have a deliberate dependency order rather than running as
+independent web adapters. Kiterunner stores every in-scope endpoint as an
+informational `api_discovery` finding. Nuclei consumes those findings from the
+current `Asset`, combines them with Nmap-derived web roots, and performs the
+vulnerability assessment. A Kiterunner failure does not prevent Nuclei from
+scanning the original service roots.
 
 ## Wazuh design
 Polymer does not attempt to remotely run Wazuh SCA. It authenticates to an existing Wazuh manager, maps the target IP to an enrolled agent, and reads that agent's SCA policy/check state. No matching agent is represented explicitly as coverage information.

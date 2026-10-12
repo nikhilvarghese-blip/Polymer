@@ -1,0 +1,6 @@
+# Install Polymer and all Python dependencies declared in pyproject.toml.
+-e .
+
+# External runtime prerequisite (not installable from PyPI):
+# Kiterunner v1.0.2 provides the `kr` binary and routes-small.kite dataset.
+# Install it with: ./scripts/install-kiterunner.sh
