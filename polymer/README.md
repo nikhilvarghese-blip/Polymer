@@ -281,6 +281,12 @@ polymer scan \
   --profile standard
 ~~~
 
+At completion, the CLI prints a run-status table with requested, scanned,
+not-scanned, passed, and failed IP totals, followed by a colored per-IP table
+showing host state, open services, tools performed, tool issues, and raw versus
+correlated finding counts. Green `PASS` and red `FAIL` describe scanner
+execution coverage—not whether vulnerabilities were found.
+
 In an interactive terminal, Polymer displays the NTP-backed server time and
 prompts for the scan end time in 24-hour **HH:MM** format. The command start is
 captured when `polymer scan` begins. If the requested time has already passed
@@ -335,6 +341,7 @@ Each scan receives a unique UTC-timestamped directory:
 output/run-<UTC timestamp>/
 ├── scan.log                  # JSON-lines run/IP/scanner timeline and errors
 ├── polymer.json              # complete normalized result keyed by IP
+├── consolidated_findings.csv # every tool finding and tool execution status
 ├── polymer.csv               # canonical final findings report
 ├── analysis.json             # correlated risk report
 ├── delta.json                # present when a baseline is supplied
@@ -355,10 +362,18 @@ output/run-<UTC timestamp>/
         └── <scanner>.json
 ~~~
 
-**polymer.csv** contains correlated findings when correlation is enabled and raw
-findings otherwise. **raw_findings.csv** always preserves scanner-level
-evidence. Targets without findings receive an explicit summary row, while
-**assets.csv** guarantees exactly one row for every requested IP.
+**consolidated_findings.csv** is the operational handoff for scan, server, and
+network teams. It explicitly records IP, host and coverage state, tool name and
+status, finding title and severity, affected service/product, CVEs, evidence,
+remediation, scanner messages, and artifact paths. Tools with no findings still
+receive a scanner-summary row, and requested IPs that were not started receive
+a target-summary row.
+
+**polymer.csv** contains deduplicated correlated findings when correlation is
+enabled and raw findings otherwise. **raw_findings.csv** always preserves the
+original scanner-level evidence. Targets without findings receive an explicit
+summary row, while **assets.csv** guarantees exactly one row for every requested
+IP.
 
 **scan.log** is flushed after every event. It records the command start and
 deadline, NTP synchronization state, each IP and scanner start/finish timestamp,

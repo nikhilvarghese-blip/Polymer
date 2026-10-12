@@ -50,11 +50,20 @@ def test_scan_shows_overall_progress_and_writes_reports(tmp_path: Path):
 
     assert result.exit_code == 0, result.output
     assert "Polymer scan complete" in result.output
+    assert "Polymer final run status" in result.output
+    assert "Per-IP scan execution status" in result.output
+    assert "IPs requested" in result.output
+    assert "IPs scanned" in result.output
+    assert "IPs not scanned" in result.output
+    assert "Tools performed" in result.output
+    assert "FAIL" in result.output
+    assert "PASS/FAIL describes scan execution coverage" in result.output
     reports = list(output.glob("run-*/polymer.json"))
     assert len(reports) == 1
     assert '"10.0.0.1"' in reports[0].read_text(encoding="utf-8")
     run_dir = reports[0].parent
     assert (run_dir / "polymer.csv").exists()
+    assert (run_dir / "consolidated_findings.csv").exists()
     assert (run_dir / "assets.csv").exists()
     assert (run_dir / "services.csv").exists()
     assert (run_dir / "scanner_status.csv").exists()
@@ -137,4 +146,5 @@ def test_analyze_writes_csv_to_a_unique_output_directory(tmp_path: Path):
     analysis_dirs = list(input_report.parent.glob("analysis-*"))
     assert len(analysis_dirs) == 1
     assert (analysis_dirs[0] / "polymer.csv").exists()
+    assert (analysis_dirs[0] / "consolidated_findings.csv").exists()
     assert (analysis_dirs[0] / "by_ip" / "10.0.0.1" / "report.csv").exists()

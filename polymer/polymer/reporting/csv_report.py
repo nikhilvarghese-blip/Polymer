@@ -10,7 +10,13 @@ import tempfile
 from typing import Any, Iterable, Sequence
 
 from polymer.intelligence.severity import SEVERITY_RANK, normalize_severity
-from polymer.models.schema import Asset, CorrelatedFinding, Finding, Service
+from polymer.models.schema import (
+    Asset,
+    CorrelatedFinding,
+    Finding,
+    Service,
+    ToolResult,
+)
 from polymer.reporting.paths import asset_folder_name, ensure_unique_asset_ips
 
 REPORT_SCHEMA_VERSION = "1.0"
@@ -132,6 +138,48 @@ SCANNER_COLUMNS = (
     "message",
 )
 
+CONSOLIDATED_FINDING_COLUMNS = (
+    "report_schema_version",
+    "record_type",
+    "ip_address",
+    "hostname",
+    "scan_outcome",
+    "asset_status",
+    "coverage_status",
+    "assessment_complete",
+    "tool_name",
+    "tool_status",
+    "tool_finding_count",
+    "finding_id",
+    "finding_title",
+    "description",
+    "severity",
+    "category",
+    "port",
+    "protocol",
+    "service",
+    "product",
+    "version",
+    "cve",
+    "check_id",
+    "policy_id",
+    "detected_at",
+    "evidence",
+    "remediation",
+    "service_count",
+    "open_services",
+    "asset_raw_finding_count",
+    "asset_correlated_finding_count",
+    "critical_count",
+    "high_count",
+    "medium_count",
+    "low_count",
+    "info_count",
+    "unknown_count",
+    "raw_artifact",
+    "tool_message",
+)
+
 
 def _json_cell(value: Any) -> str:
     if isinstance(value, set):
@@ -207,10 +255,10 @@ def _coverage_status(asset: Asset) -> str:
         return "not_assessed"
     if not statuses:
         return "not_assessed"
-    if statuses.intersection({"failed", "unavailable"}):
-        return "partial"
     if statuses.issubset({"skipped", "not_applicable"}):
         return "not_assessed"
+    if statuses.intersection({"failed", "unavailable", "skipped"}):
+        return "partial"
     return "complete"
 
 
@@ -235,6 +283,22 @@ def _scanner_issue_count(asset: Asset) -> int:
         for result in asset.tools.values()
         if result.status in {"failed", "unavailable"}
     )
+
+
+def scan_outcome(asset: Asset) -> str:
+    """Describe scan execution coverage, independently of vulnerability severity."""
+    if asset.status == "unknown" and not asset.tools:
+        return "not_started"
+    if asset.status != "up":
+        return "failed"
+    if any(
+        result.status in {"failed", "unavailable", "skipped"}
+        for result in asset.tools.values()
+    ):
+        return "failed"
+    if not any(result.status == "completed" for result in asset.tools.values()):
+        return "failed"
+    return "passed"
 
 
 def _open_services(asset: Asset) -> str:
@@ -613,24 +677,145 @@ def scanner_rows(assets: Iterable[Asset]) -> list[dict[str, Any]]:
     ]
 
 
-def write_csv_reports(assets: list[Asset], root: Path) -> None:
+def _consolidated_row(
+    asset: Asset,
+    tool_name: str = "",
+    result: ToolResult | None = None,
+    finding: Finding | None = None,
+) -> dict[str, Any]:
+    service = _service_for(
+        asset,
+        finding.port if finding else None,
+        finding.protocol if finding else None,
+    )
+    severity = _severity_data(asset)
+    if finding is not None:
+        record_type = "finding"
+        title = finding.title
+        description = finding.evidence.get("description")
+        if not isinstance(description, str):
+            description = ""
+    elif result is not None:
+        record_type = "scanner_summary"
+        title = (
+            f"No findings reported by {tool_name}"
+            if result.status == "completed"
+            else f"{tool_name} scan status: {result.status}"
+        )
+        description = result.message or ""
+    else:
+        record_type = "target_summary"
+        title = "Target was not scanned"
+        description = "No scanner execution was recorded for this requested IP."
+
+    return {
+        "report_schema_version": REPORT_SCHEMA_VERSION,
+        "record_type": record_type,
+        "ip_address": asset.ip,
+        "hostname": asset.hostname or "",
+        "scan_outcome": scan_outcome(asset),
+        "asset_status": asset.status,
+        "coverage_status": _coverage_status(asset),
+        "assessment_complete": "yes" if _coverage_status(asset) == "complete" else "no",
+        "tool_name": tool_name,
+        "tool_status": result.status if result else "not_started",
+        "tool_finding_count": len(result.findings) if result else 0,
+        "finding_id": _raw_finding_id(asset, finding) if finding else "",
+        "finding_title": title,
+        "description": description,
+        "severity": finding.severity if finding else "",
+        "category": finding.category if finding else "scan_summary",
+        "port": finding.port if finding and finding.port is not None else "",
+        "protocol": (
+            (finding.protocol or (service.protocol if service else ""))
+            if finding
+            else ""
+        ),
+        "service": (service.name or "") if service else "",
+        "product": (service.product or "") if service else "",
+        "version": (service.version or "") if service else "",
+        "cve": _joined(finding.cve) if finding else "",
+        "check_id": (finding.check_id or "") if finding else "",
+        "policy_id": (finding.policy_id or "") if finding else "",
+        "detected_at": finding.detected_at if finding else "",
+        "evidence": finding.evidence if finding else {},
+        "remediation": (finding.remediation or "") if finding else "",
+        "service_count": len(asset.services),
+        "open_services": _open_services(asset),
+        "asset_raw_finding_count": severity["raw_finding_count"],
+        "asset_correlated_finding_count": severity["correlated_finding_count"],
+        "critical_count": severity["critical_count"],
+        "high_count": severity["high_count"],
+        "medium_count": severity["medium_count"],
+        "low_count": severity["low_count"],
+        "info_count": severity["info_count"],
+        "unknown_count": severity["unknown_count"],
+        "raw_artifact": (result.raw_artifact or "") if result else "",
+        "tool_message": (result.message or "") if result else "",
+    }
+
+
+def consolidated_finding_rows(assets: Iterable[Asset]) -> list[dict[str, Any]]:
+    """Return one operational row per raw finding plus empty-tool summaries."""
+    rows: list[dict[str, Any]] = []
+    for asset in assets:
+        if not asset.tools:
+            rows.append(_consolidated_row(asset))
+            continue
+        for tool_name, result in asset.tools.items():
+            if result.findings:
+                rows.extend(
+                    _consolidated_row(asset, tool_name, result, finding)
+                    for finding in result.findings
+                )
+            else:
+                rows.append(_consolidated_row(asset, tool_name, result))
+    return rows
+
+
+def _requested_asset_rows(
+    assets: list[Asset], requested_ips: Sequence[str] | None
+) -> list[Asset]:
+    if requested_ips is None:
+        return list(assets)
+    requested = [Asset(ip=value).ip for value in requested_ips]
+    if len(requested) != len(set(requested)):
+        raise ValueError("duplicate requested IPs cannot be reported")
+    by_ip = {asset.ip: asset for asset in assets}
+    ordered = [by_ip.pop(ip, Asset(ip=ip)) for ip in requested]
+    ordered.extend(by_ip.values())
+    return ordered
+
+
+def write_csv_reports(
+    assets: list[Asset],
+    root: Path,
+    requested_ips: Sequence[str] | None = None,
+) -> None:
     """Write consolidated and per-IP CSV reports for a complete Polymer run."""
     ensure_unique_asset_ips(assets)
-    _write_csv(finding_rows(assets), FINDING_COLUMNS, root / "polymer.csv")
+    report_assets = _requested_asset_rows(assets, requested_ips)
+    ensure_unique_asset_ips(report_assets)
     _write_csv(
-        raw_finding_rows(assets),
+        consolidated_finding_rows(report_assets),
+        CONSOLIDATED_FINDING_COLUMNS,
+        root / "consolidated_findings.csv",
+    )
+    _write_csv(finding_rows(report_assets), FINDING_COLUMNS, root / "polymer.csv")
+    _write_csv(
+        raw_finding_rows(report_assets),
         FINDING_COLUMNS,
         root / "raw_findings.csv",
     )
-    _write_csv(asset_rows(assets), ASSET_COLUMNS, root / "assets.csv")
-    _write_csv(service_rows(assets), SERVICE_COLUMNS, root / "services.csv")
+    _write_csv(asset_rows(report_assets), ASSET_COLUMNS, root / "assets.csv")
+    _write_csv(service_rows(report_assets), SERVICE_COLUMNS, root / "services.csv")
     _write_csv(
-        scanner_rows(assets),
+        scanner_rows(report_assets),
         SCANNER_COLUMNS,
         root / "scanner_status.csv",
     )
 
-    for asset in assets:
+    for asset in report_assets:
         folder = root / "by_ip" / asset_folder_name(asset.ip)
         _write_csv(finding_rows([asset]), FINDING_COLUMNS, folder / "report.csv")
         _write_csv(

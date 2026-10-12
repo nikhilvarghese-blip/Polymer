@@ -32,13 +32,14 @@ from polymer.intelligence.correlation import CorrelationEngine
 from polymer.intelligence.delta import compare_assets
 from polymer.intelligence.enrichment import VulnerabilityIntelligence
 from polymer.intelligence.io import load_assets
+from polymer.intelligence.severity import highest_severity
 from polymer.reporting.json_report import (
     write_analysis_report,
     write_delta_report,
     write_ip_grouped_report,
     write_per_ip,
 )
-from polymer.reporting.csv_report import write_csv_reports
+from polymer.reporting.csv_report import scan_outcome, write_csv_reports
 
 app = typer.Typer(
     help="Polymer asset-centric security assessment orchestrator",
@@ -266,6 +267,158 @@ def print_analysis_summary(assets) -> None:
     console.print(table)
 
 
+def print_scan_status(requested_ips: list[str], assets: list[Asset]) -> None:
+    """Print operator-focused run totals and per-IP execution coverage."""
+
+    def risk_label(asset: Asset) -> str:
+        findings = (
+            list(asset.correlated_findings)
+            if asset.correlated_findings
+            else [
+                finding
+                for result in asset.tools.values()
+                for finding in result.findings
+            ]
+        )
+        if not findings:
+            return "no findings" if scan_outcome(asset) == "passed" else "unknown"
+        return highest_severity(*(finding.severity for finding in findings))
+
+    asset_by_ip = {asset.ip: asset for asset in assets}
+    passed = sum(scan_outcome(asset) == "passed" for asset in assets)
+    failed = len(assets) - passed
+    not_scanned = len(requested_ips) - len(assets)
+    tools_run = sum(
+        result.status in {"completed", "failed"}
+        for asset in assets
+        for result in asset.tools.values()
+    )
+    tool_issues = sum(
+        result.status in {"failed", "unavailable", "skipped"}
+        for asset in assets
+        for result in asset.tools.values()
+    )
+    raw_findings = sum(
+        len(result.findings)
+        for asset in assets
+        for result in asset.tools.values()
+    )
+    correlated_findings = sum(len(asset.correlated_findings) for asset in assets)
+    critical_ips = sum(risk_label(asset) == "critical" for asset in assets)
+    high_ips = sum(risk_label(asset) == "high" for asset in assets)
+    if not_scanned:
+        overall = "INCOMPLETE"
+    elif failed:
+        overall = "COMPLETED WITH FAILURES"
+    else:
+        overall = "COMPLETED"
+    overall_color = "green" if overall == "COMPLETED" else "red"
+
+    totals = Table(
+        title="Polymer final run status",
+        header_style="bold cyan",
+        show_lines=True,
+    )
+    totals.add_column("Metric", style="bold")
+    totals.add_column("Value", justify="right")
+    totals.add_row("Overall status", f"[{overall_color}]{overall}[/{overall_color}]")
+    totals.add_row("IPs requested", str(len(requested_ips)))
+    totals.add_row("IPs scanned", f"[cyan]{len(assets)}[/cyan]")
+    totals.add_row(
+        "IPs not scanned",
+        f"[red]{not_scanned}[/red]" if not_scanned else "[green]0[/green]",
+    )
+    totals.add_row("IPs passed", f"[green]{passed}[/green]")
+    totals.add_row(
+        "IPs failed", f"[red]{failed}[/red]" if failed else "[green]0[/green]"
+    )
+    totals.add_row("Tools performed", str(tools_run))
+    totals.add_row(
+        "Tool issues",
+        f"[red]{tool_issues}[/red]" if tool_issues else "[green]0[/green]",
+    )
+    totals.add_row("Raw findings", str(raw_findings))
+    totals.add_row("Correlated findings", str(correlated_findings))
+    totals.add_row(
+        "IPs with critical findings",
+        f"[red]{critical_ips}[/red]" if critical_ips else "[green]0[/green]",
+    )
+    totals.add_row(
+        "IPs with high findings",
+        f"[red]{high_ips}[/red]" if high_ips else "[green]0[/green]",
+    )
+    console.print(totals)
+
+    details = Table(
+        title="Per-IP scan execution status",
+        header_style="bold cyan",
+        show_lines=True,
+    )
+    details.add_column("IP", no_wrap=True)
+    details.add_column("Execution / host", no_wrap=True)
+    details.add_column("Risk", no_wrap=True)
+    details.add_column("Open services")
+    details.add_column("Tools", justify="right")
+    details.add_column("Issues", justify="right")
+    details.add_column("R/C", justify="right")
+    for ip in requested_ips:
+        asset = asset_by_ip.get(ip)
+        if asset is None:
+            details.add_row(
+                ip,
+                "[bold red]NOT SCANNED[/bold red]\n[red]unknown[/red]",
+                "[red]unknown[/red]",
+                "-",
+                "0",
+                "-",
+                "0/0",
+            )
+            continue
+
+        outcome = scan_outcome(asset)
+        status = "PASS" if outcome == "passed" else "FAIL"
+        color = "green" if outcome == "passed" else "red"
+        risk = risk_label(asset)
+        risk_color = (
+            "red"
+            if risk in {"critical", "high", "unknown"}
+            else "yellow"
+            if risk == "medium"
+            else "cyan"
+            if risk in {"low", "info"}
+            else "green"
+        )
+        performed = sum(
+            result.status in {"completed", "failed"}
+            for result in asset.tools.values()
+        )
+        issues = sum(
+            result.status in {"failed", "unavailable", "skipped"}
+            for result in asset.tools.values()
+        )
+        raw_count = sum(len(result.findings) for result in asset.tools.values())
+        services = ", ".join(
+            f"{service.port}/{service.protocol}:{service.name or 'unknown'}"
+            for service in asset.services
+            if service.state == "open"
+        ) or "-"
+        details.add_row(
+            asset.ip,
+            f"[bold {color}]{status}[/bold {color}]\n[{color}]{asset.status}[/{color}]",
+            f"[{risk_color}]{risk.upper()}[/{risk_color}]",
+            services,
+            str(performed),
+            f"[red]{issues}[/red]" if issues else "[green]0[/green]",
+            f"{raw_count}/{len(asset.correlated_findings)}",
+        )
+    console.print(details)
+    console.print(
+        "[dim]PASS/FAIL describes scan execution coverage. A PASS does not mean "
+        "the IP is free of vulnerabilities. Risk reflects the highest reported "
+        "finding severity. R/C means raw/correlated findings.[/dim]"
+    )
+
+
 @app.command()
 @cli_errors
 def doctor(config: Path = typer.Option(Path("config/polymer.yaml"), exists=True, readable=True)):
@@ -430,7 +583,11 @@ def analyze(
 
     print_analysis_summary(assets)
     console.print(f"[green]Phase 3 results:[/green] {out_dir}")
-    console.print(f"[green]CSV report:[/green] {out_dir / 'polymer.csv'}")
+    console.print(
+        f"[green]Consolidated tool findings CSV:[/green] "
+        f"{out_dir / 'consolidated_findings.csv'}"
+    )
+    console.print(f"[green]Correlated findings CSV:[/green] {out_dir / 'polymer.csv'}")
 
 
 @app.command()
@@ -541,7 +698,7 @@ def scan(
             )
             write_ip_grouped_report(assets, run_dir / "polymer.json")
             write_per_ip(assets, run_dir / "by_ip")
-            write_csv_reports(assets, run_dir)
+            write_csv_reports(assets, run_dir, requested_ips=values)
             partial_report.unlink(missing_ok=True)
             progress.advance(overall)
             audit.phase("reporting", "completed")
@@ -559,31 +716,15 @@ def scan(
             f"unchanged={delta['summary']['unchanged']}"
         )
 
-    table = Table(title="Polymer scan summary")
-    table.add_column("IP")
-    table.add_column("Status")
-    table.add_column("Services")
-    table.add_column("Raw findings")
-    table.add_column("Correlated")
-    table.add_column("Tools")
-    for asset in assets:
-        count = sum(len(x.findings) for x in asset.tools.values())
-        table.add_row(
-            asset.ip,
-            f"[green]{asset.status}[/green]" if asset.status == "up" else f"[yellow]{asset.status}[/yellow]",
-            str(len(asset.services)),
-            str(count),
-            str(len(asset.correlated_findings)),
-            ", ".join(
-                f"{name}:[{'green' if result.status == 'completed' else 'yellow' if result.status in {'skipped', 'not_applicable'} else 'red'}]{result.status}[/]"
-                for name, result in asset.tools.items()
-            ),
-        )
-    console.print(table)
+    print_scan_status(values, assets)
     if intelligence_enabled:
         print_analysis_summary(assets)
     console.print(f"[green]Results:[/green] {run_dir}")
-    console.print(f"[green]CSV report:[/green] {run_dir / 'polymer.csv'}")
+    console.print(
+        f"[green]Consolidated tool findings CSV:[/green] "
+        f"{run_dir / 'consolidated_findings.csv'}"
+    )
+    console.print(f"[green]Correlated findings CSV:[/green] {run_dir / 'polymer.csv'}")
     console.print(f"[green]Detailed scan log:[/green] {run_dir / 'scan.log'}")
     if deadline_reached:
         console.print(

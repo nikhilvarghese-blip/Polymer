@@ -94,6 +94,30 @@ def test_csv_bundle_is_complete_per_ip_and_formula_safe(tmp_path: Path):
 
     write_csv_reports([affected, no_findings], tmp_path)
 
+    consolidated = read_csv(tmp_path / "consolidated_findings.csv")
+    nuclei_finding = next(
+        row
+        for row in consolidated
+        if row["record_type"] == "finding" and row["tool_name"] == "nuclei"
+    )
+    assert nuclei_finding["ip_address"] == "10.0.0.10"
+    assert nuclei_finding["tool_status"] == "failed"
+    assert nuclei_finding["finding_title"].startswith("'=")
+    assert nuclei_finding["severity"] == "high"
+    assert nuclei_finding["port"] == "443"
+    assert nuclei_finding["service"] == "https"
+    assert nuclei_finding["product"] == "nginx"
+    assert nuclei_finding["cve"] == "CVE-2026-1234"
+    assert nuclei_finding["raw_artifact"] == "raw/nuclei/10.0.0.10.jsonl"
+    nmap_summary = next(
+        row
+        for row in consolidated
+        if row["record_type"] == "scanner_summary"
+        and row["tool_name"] == "nmap"
+        and row["ip_address"] == "10.0.0.10"
+    )
+    assert nmap_summary["tool_finding_count"] == "0"
+
     report = read_csv(tmp_path / "polymer.csv")
     assert {row["ip_address"] for row in report} == {"10.0.0.10", "10.0.0.11"}
     finding = next(row for row in report if row["record_type"] == "finding")
@@ -135,6 +159,31 @@ def test_csv_bundle_is_complete_per_ip_and_formula_safe(tmp_path: Path):
     ):
         assert (tmp_path / "by_ip" / "10.0.0.10" / filename).exists()
         assert (tmp_path / "by_ip" / "10.0.0.11" / filename).exists()
+
+
+def test_csv_includes_requested_ips_that_were_not_started(tmp_path: Path):
+    scanned = Asset(
+        ip="10.0.0.20",
+        status="up",
+        tools={"nmap": ToolResult(tool="nmap", status="completed")},
+    )
+
+    write_csv_reports(
+        [scanned],
+        tmp_path,
+        requested_ips=["10.0.0.20", "10.0.0.21"],
+    )
+
+    consolidated = read_csv(tmp_path / "consolidated_findings.csv")
+    not_started = next(row for row in consolidated if row["ip_address"] == "10.0.0.21")
+    assert not_started["record_type"] == "target_summary"
+    assert not_started["scan_outcome"] == "not_started"
+    assert not_started["tool_status"] == "not_started"
+    assert {row["ip_address"] for row in read_csv(tmp_path / "assets.csv")} == {
+        "10.0.0.20",
+        "10.0.0.21",
+    }
+    assert (tmp_path / "by_ip" / "10.0.0.21" / "summary.csv").exists()
 
 
 def test_asset_ip_validation_prevents_report_path_traversal():

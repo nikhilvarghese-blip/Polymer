@@ -22,6 +22,7 @@ A normal Phase 3 run contains:
 ```
 output/run-<timestamp>/
   polymer.json
+  consolidated_findings.csv # operational all-tools CSV report
   polymer.csv                # canonical final CSV report
   raw_findings.csv           # source-tool findings
   assets.csv                 # one row per requested IP
