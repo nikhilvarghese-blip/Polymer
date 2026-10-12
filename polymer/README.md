@@ -114,17 +114,13 @@ cd polymer
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+python -m pip install -e .
 cp config/polymer.example.yaml config/polymer.yaml
 ~~~
 
-`requirements.txt` installs Polymer's Python requirements. Kiterunner is a Go
-binary rather than a PyPI package; install its pinned upstream release and
-route dataset separately:
-
-~~~bash
-./scripts/install-kiterunner.sh
-~~~
+Kiterunner is a Go binary rather than a Python dependency. On Kali, its pinned
+binary and route dataset are installed as part of `./scripts/install-kali.sh`.
+Manual Python installation does not install external scanner binaries.
 
 For development dependencies:
 

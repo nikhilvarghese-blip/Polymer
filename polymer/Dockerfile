@@ -10,6 +10,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 COPY . /app
-RUN /app/scripts/install-kiterunner.sh \
+RUN /app/scripts/install-kali.sh --kiterunner-only \
     && python3 -m pip install --break-system-packages .
 ENTRYPOINT ["polymer"]

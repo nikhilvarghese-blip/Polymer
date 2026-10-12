@@ -19,13 +19,6 @@ venv. It also installs the pinned upstream Kiterunner release and the small
 contextual API route dataset. It attempts the Kali Nuclei package but leaves a
 clear warning if Nuclei is unavailable.
 
-Kiterunner can also be installed or repaired independently:
-
-```bash
-./scripts/install-kiterunner.sh
-polymer doctor --config config/polymer.yaml
-```
-
 For authenticated API discovery and vulnerability assessment, export a JSON
 object of request headers. Polymer supplies the values to both Kiterunner and
 Nuclei and does not log them:
