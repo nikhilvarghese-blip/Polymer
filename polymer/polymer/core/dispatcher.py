@@ -12,6 +12,9 @@ class ScannerDispatcher:
     def __init__(self, config: dict, profile_tools: set[str] | None = None):
         self.config = config
         self.profile_tools = profile_tools
+        self.routing = config.get("scan", {}).get("routing", "adaptive")
+        if self.routing not in {"adaptive", "exhaustive"}:
+            raise ValueError("scan.routing must be 'adaptive' or 'exhaustive'")
 
     def _enabled(self, key: str) -> bool:
         cfg = self.config.get("scan", {}).get(key, {})
@@ -31,17 +34,32 @@ class ScannerDispatcher:
         if self._enabled("wazuh"):
             selected.append("wazuh_sca")
         # API discovery must run before Nuclei so its routes become VA targets.
-        if self._enabled("kiterunner") and web_endpoints(asset):
+        if self._enabled("kiterunner") and (
+            self.routing == "exhaustive" or web_endpoints(asset)
+        ):
             selected.append("kiterunner")
-        if self._enabled("nuclei") and web_endpoints(asset):
+        nuclei_ip_scan = bool(
+            self.config.get("scan", {}).get("nuclei", {}).get("scan_ip", False)
+        )
+        if self._enabled("nuclei") and (
+            self.routing == "exhaustive" or nuclei_ip_scan or web_endpoints(asset)
+        ):
             selected.append("nuclei")
-        if self._enabled("nikto") and web_endpoints(asset):
+        if self._enabled("nikto") and (
+            self.routing == "exhaustive" or web_endpoints(asset)
+        ):
             selected.append("nikto")
-        if self._enabled("testssl") and tls_ports(asset):
+        if self._enabled("testssl") and (
+            self.routing == "exhaustive" or tls_ports(asset)
+        ):
             selected.append("testssl")
-        if self._enabled("ssh_audit") and ssh_ports(asset):
+        if self._enabled("ssh_audit") and (
+            self.routing == "exhaustive" or ssh_ports(asset)
+        ):
             selected.append("ssh_audit")
-        if self._enabled("enum4linux") and smb_present(asset):
+        if self._enabled("enum4linux") and (
+            self.routing == "exhaustive" or smb_present(asset)
+        ):
             selected.append("enum4linux")
         if self._enabled("greenbone"):
             selected.append("greenbone")

@@ -90,7 +90,17 @@ if [[ "${EUID}" -eq 0 ]]; then
 fi
 
 sudo apt-get update
-sudo apt-get install -y python3 python3-venv python3-pip nmap git curl ca-certificates
+sudo apt-get install -y \
+  python3 \
+  python3-venv \
+  python3-pip \
+  nmap \
+  nikto \
+  testssl.sh \
+  enum4linux-ng \
+  git \
+  curl \
+  ca-certificates
 
 install_kiterunner
 
@@ -105,10 +115,15 @@ python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -e .
+# Keep ssh-audit in Polymer's virtual environment so the scanner is available
+# whenever the Polymer environment is active.
+python -m pip install --upgrade ssh-audit
 
 if [[ ! -f config/polymer.yaml ]]; then
   cp config/polymer.example.yaml config/polymer.yaml
 fi
 
-echo "Polymer installed. Activate with: source .venv/bin/activate"
-echo "Then run: polymer doctor --config config/polymer.yaml\nThen run: polymer validate --targets targets.example.txt --config config/polymer.yaml"
+echo "Polymer and local CLI scanners installed. Activate with: source .venv/bin/activate"
+echo "Then run: polymer doctor --config config/polymer.yaml"
+echo "Then run: polymer validate --targets targets.example.txt --config config/polymer.yaml"
+echo "Greenbone/GVM and Wazuh require separate service setup and credentials; see README.md."

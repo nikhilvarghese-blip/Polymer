@@ -1,17 +1,38 @@
+discovery:
+  scanners: [nmap]
+  routing: adaptive
+
 quick:
   scanners: [nmap, nuclei]
+  routing: adaptive
 
 api:
   scanners: [nmap, kiterunner, nuclei]
+  routing: adaptive
 
 standard:
   scanners: [nmap, kiterunner, nuclei, wazuh, ssh_audit, testssl, nikto, enum4linux]
+  routing: adaptive
 
 full:
   scanners: [nmap, kiterunner, nuclei, wazuh, ssh_audit, testssl, nikto, enum4linux, greenbone]
+  routing: exhaustive
+  scan_overrides:
+    nmap:
+      # Scan every TCP port with full service-version probing. This is much slower
+      # than the standard profile and intentionally uses TCP connect mode so it can
+      # run without raw-socket privileges.
+      arguments: ["-Pn", "-sT", "-sV", "--version-all", "-p-"]
+      timeout: 7200
+    nuclei:
+      # Include the IP itself so Nuclei network templates can run even when Nmap
+      # does not identify an HTTP service.
+      scan_ip: true
 
 web:
   scanners: [nmap, kiterunner, nuclei, nikto, testssl]
+  routing: adaptive
 
 infrastructure:
   scanners: [nmap, wazuh, ssh_audit, testssl, enum4linux, greenbone]
+  routing: adaptive

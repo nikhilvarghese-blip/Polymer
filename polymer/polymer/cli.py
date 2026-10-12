@@ -126,6 +126,30 @@ def load_profile(
     scanners = profile.get("scanners", [])
     if not isinstance(scanners, list) or not all(isinstance(item, str) for item in scanners):
         raise ValueError(f"profile {name!r} must contain a list of scanner names")
+
+    routing = profile.get("routing")
+    if routing is not None:
+        if routing not in {"adaptive", "exhaustive"}:
+            raise ValueError(
+                f"profile {name!r} routing must be 'adaptive' or 'exhaustive'"
+            )
+        config.setdefault("scan", {})["routing"] = routing
+
+    overrides = profile.get("scan_overrides", {})
+    if not isinstance(overrides, dict):
+        raise ValueError(f"profile {name!r} scan_overrides must be a mapping")
+    scan_config = config.setdefault("scan", {})
+    for scanner_name, scanner_overrides in overrides.items():
+        if not isinstance(scanner_name, str) or not isinstance(scanner_overrides, dict):
+            raise ValueError(
+                f"profile {name!r} scan_overrides entries must be scanner mappings"
+            )
+        configured = scan_config.setdefault(scanner_name, {})
+        if not isinstance(configured, dict):
+            raise ValueError(
+                f"scan configuration for {scanner_name!r} must be a mapping"
+            )
+        configured.update(scanner_overrides)
     return set(scanners)
 
 

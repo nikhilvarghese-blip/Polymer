@@ -17,7 +17,7 @@ enum4linux-ng, and Greenbone/GVM.
 
 - IP and CIDR validation with private-address safeguards.
 - Nmap-led discovery and service-aware scanner selection.
-- Quick, API, web, infrastructure, standard, and full scan profiles.
+- Discovery, quick, API, web, infrastructure, standard, and full scan profiles.
 - Colored overall and per-scanner CLI progress.
 - Failure isolation so one scanner error does not discard the scan.
 - Cross-tool correlation and deduplication.
@@ -59,21 +59,23 @@ results.
 
 ## Supported integrations
 
-| Integration | Purpose | Default |
+| Integration | What it assesses | When it runs |
 | --- | --- | --- |
-| Nmap | Host and service discovery | Enabled |
-| Kiterunner | Context-aware API endpoint discovery | Enabled |
-| Nuclei | Template-based web and service checks | Enabled |
-| Nikto | Web server assessment | Enabled |
-| testssl.sh | TLS configuration assessment | Enabled |
-| ssh-audit | SSH configuration assessment | Enabled |
-| enum4linux-ng | SMB and NetBIOS enumeration | Enabled |
-| Wazuh SCA | Agent-backed configuration findings | Disabled until configured |
-| Greenbone/GVM | Broad vulnerability assessment | Disabled in the example configuration |
-| NVD and CISA KEV | Vulnerability enrichment and exploitation context | Enabled, best effort |
+| Nmap | Live hosts, TCP services (plus UDP when configured), products, and versions | Always; depth depends on profile |
+| Kiterunner | Hidden API routes, methods, parameters, and request bodies | HTTP(S) services |
+| Nuclei | Template-driven CVEs, exposures, misconfigurations, web/API and network checks | IPs and discovered HTTP/API targets |
+| Nikto | Dangerous files, outdated web components, headers, and web-server weaknesses | HTTP(S) services |
+| testssl.sh | Protocols, ciphers, certificates, and known TLS weaknesses | TLS services |
+| ssh-audit | SSH algorithms, key exchange, host keys, ciphers, and MAC weaknesses | SSH services |
+| enum4linux-ng | SMB/NetBIOS exposure, anonymous access, and signing observations | SMB/NetBIOS services |
+| Wazuh SCA | Authenticated operating-system and configuration policy findings | Hosts with a matched Wazuh agent |
+| Greenbone/GVM | Broad network vulnerability assessment and CVT coverage | Full/infrastructure profiles when enabled |
+| NVD and CISA KEV | CVE enrichment and confirmed known-exploitation context | Correlation phase, best effort |
 
-Only scanners selected by the active profile and applicable to a target are run.
-Use **polymer doctor** to see which configured dependencies are ready.
+Only scanners selected by the active profile are considered. Adaptive profiles
+run applicable scanners; the full profile records an explicit result for every
+enabled scanner. Use **polymer doctor** to see which configured dependencies are
+ready.
 
 ## Requirements
 
@@ -99,12 +101,17 @@ source .venv/bin/activate
 
 The installer creates a virtual environment, installs Polymer, installs the
 pinned and checksum-verified Kiterunner binary and API route dataset, and
-attempts to install the base discovery tools. Install any additional scanners
-required by your profile, then verify the environment:
+installs the local CLI scanners used by the discovery, quick, API, web, and
+standard profiles: Nmap, Nuclei when available from Kali, Nikto, testssl.sh,
+enum4linux-ng, and ssh-audit. Verify the environment:
 
 ~~~bash
 polymer doctor --config config/polymer.yaml
 ~~~
+
+Greenbone/GVM and Wazuh are service integrations rather than standalone local
+binaries. Configure their services, feeds, agents, socket/API access, and
+credentials before expecting them to run in infrastructure or full scans.
 
 ### Manual installation
 
@@ -172,6 +179,7 @@ scope:
 
 scan:
   profile: standard
+  routing: adaptive
   nmap:
     enabled: true
     binary: nmap
@@ -185,6 +193,7 @@ scan:
     headers_env: POLYMER_API_HEADERS
   nuclei:
     enabled: true
+    scan_ip: true
     headers_env: POLYMER_API_HEADERS
 
 intelligence:
@@ -228,23 +237,86 @@ method-specific API coverage.
 
 Profiles are defined in **config/profiles.yaml**:
 
-| Profile | Intended use |
-| --- | --- |
-| quick | Discovery and lightweight Nuclei checks |
-| api | Focused Kiterunner discovery followed by Nuclei API VA |
-| standard | General-purpose assessment |
-| full | All configured scanners, including Greenbone |
-| web | Web and TLS-focused assessment |
-| infrastructure | SSH, TLS, SMB, host configuration, and Greenbone |
+| Profile | Scanner coverage | Intended use |
+| --- | --- | --- |
+| discovery | Nmap only | Inventory live hosts, ports, services, products, and versions |
+| quick | Nmap + Nuclei | Fast initial exposure and template-based check |
+| api | Nmap + Kiterunner + Nuclei | Discover API routes first, then assess the roots and discovered routes |
+| web | Nmap + Kiterunner + Nuclei + Nikto + testssl.sh | Web, API, web-server, and TLS assessment |
+| infrastructure | Nmap + Wazuh + ssh-audit + testssl.sh + enum4linux-ng + Greenbone | Server, network-service, SMB, SSH, TLS, and authenticated host configuration assessment |
+| standard | Every service-specific scanner except Greenbone | General-purpose assessment with adaptive service routing |
+| full | Every enabled scanner, including Greenbone | Deepest built-in assessment and explicit per-tool accounting |
 
 Select a profile with **--profile**. If omitted, Polymer uses **scan.profile**
-from the configuration.
+from the configuration. Adaptive profiles only start a scanner when Nmap finds
+a compatible service. The **full** profile uses exhaustive routing: every
+enabled scanner is scheduled for every live IP. A scanner that cannot apply to
+that IP records **not_applicable** with a reason rather than disappearing from
+coverage. Kiterunner still runs before Nuclei so discovered API routes are
+included in the vulnerability assessment.
 
-For a focused API assessment, run:
+The **full** profile also changes Nmap discovery from the default most-common
+ports to all 65,535 TCP ports, uses full version probing, and gives discovery a
+longer timeout. Nuclei receives the IP itself for network templates plus every
+HTTP root and in-scope API route. This profile can take many hours on a large
+scope; use a realistic **--end-time** and review incomplete coverage before
+treating any target as assessed.
+
+Examples for every scan type:
 
 ~~~bash
+# Inventory only
+polymer scan --targets targets.txt --config config/polymer.yaml --profile discovery
+
+# Fast first pass
+polymer scan --targets targets.txt --config config/polymer.yaml --profile quick
+
+# API discovery followed by API vulnerability assessment
 polymer scan --targets targets.txt --config config/polymer.yaml --profile api
+
+# Web, API, and TLS assessment
+polymer scan --targets targets.txt --config config/polymer.yaml --profile web
+
+# Server and network infrastructure assessment
+polymer scan --targets targets.txt --config config/polymer.yaml --profile infrastructure
+
+# Balanced general-purpose assessment
+polymer scan --targets targets.txt --config config/polymer.yaml --profile standard
+
+# Deepest built-in assessment; all enabled tools are accounted for
+polymer scan --targets targets.txt --config config/polymer.yaml --profile full
 ~~~
+
+Before **standard**, **infrastructure**, or **full**, run **polymer doctor**.
+Tools disabled in **config/polymer.yaml**, missing from `PATH`, lacking required
+credentials, or not applicable to the discovered service cannot produce
+coverage. For authenticated API testing, export **POLYMER_API_HEADERS**. For
+authenticated host checks, configure Wazuh agents. For broad VA, configure and
+update Greenbone feeds and credentials.
+
+### Coverage boundaries
+
+No automated scanner can guarantee that it found every vulnerability. Results
+depend on network visibility, credentials, scanner and template/feed freshness,
+rate limits, application state, scan duration, and whether a weakness requires
+business-logic or manual exploitation. Polymer deliberately performs assessment
+and enumeration; it does not automatically exploit findings.
+
+For the strongest defensible coverage:
+
+1. Use **--profile full** with all dependencies ready and sufficient time for
+   the all-TCP-port discovery and Greenbone task.
+2. Supply authorized authentication for APIs, Wazuh, and Greenbone. Compare
+   authenticated and unauthenticated results where permitted.
+3. Update Nuclei templates, Greenbone feeds, Kiterunner routes, Nmap service
+   data, and vulnerability intelligence before the run.
+4. Review **scanner_status.csv** for failed, unavailable, skipped, or
+   not-applicable tools, and treat **assessment_complete=no** as incomplete.
+5. Add an authorized UDP discovery pass when UDP exposure is in scope; the
+   built-in full profile scans all TCP ports but does not force a privileged
+   all-UDP scan.
+6. Supplement automation with authenticated application testing, source/code
+   review, cloud configuration review, and manual business-logic testing.
 
 ## Commands
 

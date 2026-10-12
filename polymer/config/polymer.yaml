@@ -8,6 +8,7 @@ scope:
 
 scan:
   profile: standard
+  routing: adaptive
   concurrency: 1
   nmap:
     enabled: true
@@ -29,6 +30,8 @@ scan:
     enabled: true
     binary: nuclei
     timeout: 600
+    # Scan the IP as well as HTTP/API URLs so network templates are not omitted.
+    scan_ip: true
     severity: ["critical", "high", "medium", "low", "info"]
     headers_env: "POLYMER_API_HEADERS"
   wazuh:

@@ -34,6 +34,7 @@ class NucleiScanner(Scanner):
 
     def _targets(self, asset: Asset) -> tuple[list[str], set[str]]:
         roots = [url for url, _port in web_endpoints(asset)]
+        network_targets = [asset.ip] if self.config.get("scan_ip", False) else []
         discovered: list[str] = []
         result = asset.tools.get("kiterunner")
         if result is not None:
@@ -44,7 +45,21 @@ class NucleiScanner(Scanner):
                 if value:
                     discovered.append(value)
         api_targets = set(discovered)
-        return list(dict.fromkeys([*roots, *discovered])), api_targets
+        return list(
+            dict.fromkeys([*network_targets, *roots, *discovered])
+        ), api_targets
+
+    @staticmethod
+    def _category(value: object, api_match: bool) -> str:
+        if api_match:
+            return "api"
+        if isinstance(value, str):
+            try:
+                if urlsplit(value).scheme in {"http", "https"}:
+                    return "web"
+            except ValueError:
+                pass
+        return "network"
 
     @staticmethod
     def _is_api_match(value: object, api_targets: set[str]) -> bool:
@@ -175,7 +190,7 @@ class NucleiScanner(Scanner):
                     tool=self.name,
                     title=info.get("name") or item.get("template-id") or "Nuclei finding",
                     severity=severity,
-                    category="api" if api_match else "web",
+                    category=self._category(matched_at, api_match),
                     port=self._matched_port(item),
                     protocol="tcp",
                     cve=[str(cve).upper() for cve in raw_cves if cve],
@@ -206,7 +221,7 @@ class NucleiScanner(Scanner):
             findings=findings,
             raw_artifact=f"{outfile}, {target_file}",
             message=(
-                f"scanned {len(targets)} URL target(s), including "
+                f"scanned {len(targets)} network/URL target(s), including "
                 f"{len(api_targets)} Kiterunner-discovered API endpoint(s)"
             ),
         )
