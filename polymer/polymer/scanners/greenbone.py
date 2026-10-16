@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import time
 from pathlib import Path
 
@@ -27,6 +28,8 @@ class GreenboneScanner(Scanner):
     """
 
     name = "greenbone"
+
+    GENERIC_RESULT_TITLES = {"services", "greenbone finding"}
 
     DEFAULT_SOCKET = "/run/gvmd/gvmd.sock"
 
@@ -600,7 +603,7 @@ class GreenboneScanner(Scanner):
             title = (
                 result.findtext("name")
                 or "Greenbone finding"
-            )
+            ).strip()
 
             # ---------------------------------------------------------
             # CVSS / severity
@@ -632,6 +635,10 @@ class GreenboneScanner(Scanner):
             )
 
             port = self._parse_port(
+                port_text
+            )
+
+            protocol = self._parse_protocol(
                 port_text
             )
 
@@ -670,13 +677,16 @@ class GreenboneScanner(Scanner):
                     or ""
                 )
 
-                cves = [
-                    cve.strip()
-                    for cve in cve_text.split(",")
-                    if cve.strip()
-                    and cve.strip().upper()
-                    != "NOCVE"
-                ]
+                cves = list(
+                    dict.fromkeys(
+                        match.upper()
+                        for match in re.findall(
+                            r"CVE-\d{4}-\d{4,}",
+                            cve_text,
+                            flags=re.IGNORECASE,
+                        )
+                    )
+                )
 
             # ---------------------------------------------------------
             # Additional Greenbone information
@@ -687,7 +697,31 @@ class GreenboneScanner(Scanner):
                     "description"
                 )
                 or ""
-            )
+            ).strip()
+
+            # Some Greenbone discovery NVTs use a generic result name for
+            # several distinct observations on the same port. Add only the
+            # scanner's first description line so they remain understandable
+            # and do not collapse into one finding during correlation.
+            if title.lower() in self.GENERIC_RESULT_TITLES and description:
+                first_line = next(
+                    (line.strip() for line in description.splitlines() if line.strip()),
+                    "",
+                )
+                if first_line:
+                    title = f"{title}: {first_line[:180]}"
+
+            # Preserve a scanner-provided solution when the GMP result includes
+            # it as a dedicated field. Do not synthesize remediation text.
+            solution = (
+                result.findtext("nvt/solution")
+                or result.findtext("solution")
+                or ""
+            ).strip()
+
+            tags = result.findtext("nvt/tags") or ""
+            if not solution and tags:
+                solution = self._tag_value(tags, "solution")
 
             threat = (
                 result.findtext(
@@ -724,6 +758,19 @@ class GreenboneScanner(Scanner):
             if qod_text:
                 evidence["qod"] = qod_text
 
+            solution_element = result.find("nvt/solution")
+            if solution_element is not None:
+                solution_type = solution_element.get("type")
+                solution_method = solution_element.get("method")
+                if solution_type:
+                    evidence["solution_type"] = solution_type
+                if solution_method:
+                    evidence["solution_method"] = solution_method
+
+            result_identifier = result.get("id")
+            if result_identifier:
+                evidence["greenbone_result_id"] = result_identifier
+
             # ---------------------------------------------------------
             # Polymer finding
             # ---------------------------------------------------------
@@ -733,10 +780,13 @@ class GreenboneScanner(Scanner):
                     tool=self.name,
                     title=title,
                     severity=severity,
-                    category="vulnerability",
+                    category=("observation" if severity == "info" else "vulnerability"),
                     port=port,
+                    protocol=protocol,
                     cve=cves,
+                    check_id=oid,
                     evidence=evidence,
+                    remediation=solution or None,
                 )
             )
 
@@ -788,6 +838,24 @@ class GreenboneScanner(Scanner):
             pass
 
         return None
+
+    @staticmethod
+    def _parse_protocol(value: str) -> str | None:
+        if not isinstance(value, str) or "/" not in value:
+            return None
+        protocol = value.rsplit("/", 1)[-1].strip().lower()
+        return protocol if protocol in {"tcp", "udp", "icmp", "sctp"} else None
+
+    @staticmethod
+    def _tag_value(tags: str, name: str) -> str:
+        """Read a direct Greenbone NVT tag without creating remediation text."""
+        if not isinstance(tags, str):
+            return ""
+        prefix = f"{name}="
+        for part in tags.split("|"):
+            if part.startswith(prefix):
+                return part[len(prefix):].replace("\\n", "\n").strip()
+        return ""
 
     # ---------------------------------------------------------------------
     # XML utility

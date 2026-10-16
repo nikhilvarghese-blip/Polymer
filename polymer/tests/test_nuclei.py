@@ -21,8 +21,10 @@ def test_nuclei_normalizes_string_cve_and_unknown_severity(tmp_path: Path, monke
                     "template-id": "fixture",
                     "matched-at": "https://10.0.0.1:8443/admin",
                     "info": {
-                        "name": "Fixture finding",
+                        "name": {"unexpected": "object"},
                         "severity": "unexpected",
+                        "description": {"unexpected": "object"},
+                        "remediation": {"unexpected": "object"},
                         "classification": {"cve-id": "CVE-2026-1234"},
                     },
                 }
@@ -44,6 +46,10 @@ def test_nuclei_normalizes_string_cve_and_unknown_severity(tmp_path: Path, monke
     assert result.status == "completed"
     assert result.findings[0].severity == "unknown"
     assert result.findings[0].cve == ["CVE-2026-1234"]
+    assert result.findings[0].title == "fixture"
+    assert result.findings[0].check_id == "fixture"
+    assert result.findings[0].evidence["description"] is None
+    assert result.findings[0].remediation is None
     assert result.findings[0].port == 8443
     assert result.findings[0].protocol == "tcp"
 

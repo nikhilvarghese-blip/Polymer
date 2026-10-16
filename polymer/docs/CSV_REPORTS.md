@@ -60,3 +60,36 @@ tool-level findings, regardless of correlation.
 Use `consolidated_findings.csv` for operational filtering by IP, tool, scanner
 status, port, product, or severity. Use `polymer.csv` for deduplicated risk and
 remediation reporting.
+
+## Human-readable and evidence fields
+
+The management-facing fields are `finding_title`/`title`, `description`,
+`severity`, `category`, and `remediation`. These contain normalized text derived
+from explicit scanner findings. Polymer does not turn arbitrary scanner objects
+into titles, descriptions, or remediation advice. If a scanner does not supply
+a recommendation, the remediation field remains empty.
+
+The `evidence` column contains machine-readable scanner fields needed for
+technical validation and auditability. It may contain nested scanner structure,
+but it is not used as the management-facing finding narrative. The complete
+scanner output remains in the path named by `raw_artifact`/`raw_artifacts`.
+
+## Scanner normalization rules
+
+| Scanner | Management finding source | Severity and recommendation handling |
+| --- | --- | --- |
+| Nmap | Host, port, protocol, service, product, and version inventory is written to `services.csv`; Nmap inventory is not mislabeled as a vulnerability. | Execution state is written to `scanner_status.csv`. |
+| Kiterunner | Each in-scope method and URL is an `api_discovery` observation with its HTTP status. | Always informational; response chains remain technical evidence, not vulnerability prose. |
+| Nuclei | Template name, description, matched target, template ID, and explicit CVE classification. | Uses the template's severity and remediation only when supplied by Nuclei. |
+| Nikto | The scanner's vulnerability message, test ID, URL/method, references, and explicit CVEs. | Nikto does not provide a reliable severity in its JSON contract, so severity remains `unknown`; remediation stays empty unless the scanner supplies it. |
+| testssl.sh | One row per explicit `LOW`, `MEDIUM`, `HIGH`, or `CRITICAL` result, with a readable check title and the exact scanner finding as its description. | `OK` and `INFO` are not vulnerabilities. `WARN` and `FATAL` are scanner/check failures and affect tool status instead of creating false findings. |
+| ssh-audit | One row per affected algorithm, including algorithm class, scanner notes, source rating, and requested action. | Severity is mapped from ssh-audit's own rating. Remediation is emitted only for an explicit ssh-audit add/remove/change recommendation. |
+| enum4linux-ng | Only exact boolean results for signing, SMBv1-only support, null sessions, and guest sessions become findings. | Severity remains `unknown` because enum4linux-ng does not assign one. General enumeration text cannot trigger a finding. |
+| Wazuh SCA | Failed checks only, with policy/check ID, title, reason, and scanner-provided remediation. | Severity remains `unknown` unless a future source field supplies it; structured objects are never copied into narrative columns. |
+| Greenbone/GVM | Result name, description, NVT OID, location/protocol, CVSS score, CVEs, QoD, and result ID. | Positive-CVSS results are vulnerabilities. CVSS 0/Greenbone Log inventory remains an `observation`. Solutions are copied only from Greenbone's explicit solution field/tag. |
+
+Blank remediation is intentional: it means the source scanner did not provide
+one. Polymer does not manufacture advice or vulnerability claims to fill empty
+cells. Scanner warnings, corrupt artifacts, non-zero exits, and incomplete
+checks are represented as scanner status/messages so an incomplete assessment
+cannot be mistaken for a clean result.

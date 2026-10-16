@@ -65,11 +65,16 @@ def test_kiterunner_normalizes_discovered_api_routes(tmp_path: Path, monkeypatch
     assert finding.severity == "info"
     assert finding.port == 8443
     assert finding.evidence == {
+        "description": (
+            "Kiterunner reported HTTP status 401 for POST "
+            "https://10.0.0.8:8443/api/v1/users."
+        ),
         "url": "https://10.0.0.8:8443/api/v1/users",
         "method": "POST",
         "status_code": 401,
         "response_chain": [{"uri": "", "sc": 401, "len": 42}],
     }
+    assert finding.check_id == "POST /api/v1/users"
     assert "--output" in captured[0]
     assert "--progress=false" in captured[0]
     assert captured[0][-2:] == ["--header", "Authorization: Bearer fixture-token"]

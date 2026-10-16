@@ -265,3 +265,82 @@ def test_imported_report_attribution_and_duplicate_ips_are_rejected(tmp_path: Pa
             [Asset(ip="10.0.0.1"), Asset(ip="10.0.0.1")],
             tmp_path,
         )
+
+
+def test_csv_uses_scanner_narrative_without_copying_structures_into_description(
+    tmp_path: Path,
+):
+    finding = Finding(
+        tool="testssl",
+        title="TLS-FIXTURE",
+        severity="medium",
+        category="tls",
+        port=443,
+        protocol="tcp",
+        evidence={
+            "finding": "Scanner-provided TLS weakness description",
+            "technical": {"cipher": "fixture", "bits": 128},
+        },
+    )
+    asset = Asset(
+        ip="10.0.0.44",
+        status="up",
+        services=[Service(port=443, protocol="tcp", name="https")],
+        tools={
+            "testssl": ToolResult(
+                tool="testssl", status="completed", findings=[finding]
+            )
+        },
+    )
+
+    write_csv_reports([asset], tmp_path)
+
+    row = next(
+        item
+        for item in read_csv(tmp_path / "consolidated_findings.csv")
+        if item["record_type"] == "finding"
+    )
+    assert row["finding_title"] == "TLS-FIXTURE"
+    assert row["description"] == "Scanner-provided TLS weakness description"
+    assert row["remediation"] == ""
+    assert '"technical"' in row["evidence"]
+
+
+def test_raw_finding_ids_distinguish_same_title_with_different_scanner_text(
+    tmp_path: Path,
+):
+    findings = [
+        Finding(
+            tool="greenbone",
+            title="Services",
+            severity="info",
+            category="observation",
+            port=443,
+            protocol="tcp",
+            check_id="fixture-oid",
+            evidence={"description": description},
+        )
+        for description in (
+            "A TLS server answered on this port.",
+            "A web server is running through TLS.",
+        )
+    ]
+    asset = Asset(
+        ip="10.0.0.45",
+        status="up",
+        tools={
+            "greenbone": ToolResult(
+                tool="greenbone", status="completed", findings=findings
+            )
+        },
+    )
+
+    write_csv_reports([asset], tmp_path)
+
+    rows = [
+        row
+        for row in read_csv(tmp_path / "raw_findings.csv")
+        if row["record_type"] == "finding"
+    ]
+    assert len(rows) == 2
+    assert len({row["finding_id"] for row in rows}) == 2

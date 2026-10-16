@@ -225,6 +225,12 @@ class KiterunnerScanner(Scanner):
                 truncated = True
                 continue
             port = urlsplit(url).port or (443 if url.startswith("https://") else 80)
+            description = (
+                f"Kiterunner reported HTTP status {status_code} for "
+                f"{method} {url}."
+                if status_code
+                else f"Kiterunner reported the API route {method} {url}."
+            )
             findings.append(
                 Finding(
                     tool=self.name,
@@ -233,7 +239,9 @@ class KiterunnerScanner(Scanner):
                     category="api_discovery",
                     port=port,
                     protocol="tcp",
+                    check_id=f"{method} {urlsplit(url).path}",
                     evidence={
+                        "description": description,
                         "url": url,
                         "method": method,
                         "status_code": status_code,

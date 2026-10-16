@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import re
 import shutil
 from urllib.parse import urlsplit
 
@@ -9,7 +10,7 @@ from polymer.core.http_headers import api_headers
 from polymer.core.services import web_endpoints
 from polymer.models.schema import Asset, Finding, ToolResult
 from polymer.scanners.base import Scanner
-from polymer.utils.command import run_command
+from polymer.utils.command import CommandExecutionError, run_command
 
 
 class NucleiScanner(Scanner):
@@ -114,6 +115,52 @@ class NucleiScanner(Scanner):
             return None
         return None
 
+    @staticmethod
+    def _matched_protocol(
+        item: dict, asset: Asset, port: int | None
+    ) -> str | None:
+        raw_protocol = item.get("protocol")
+        if isinstance(raw_protocol, str):
+            protocol = raw_protocol.strip().lower()
+            if protocol in {"tcp", "udp", "icmp", "sctp"}:
+                return protocol
+
+        matched = item.get("matched-at") or item.get("host") or item.get("url")
+        if isinstance(matched, str):
+            try:
+                if urlsplit(matched).scheme in {"http", "https"}:
+                    return "tcp"
+            except ValueError:
+                pass
+
+        if port is not None:
+            protocols = {
+                service.protocol
+                for service in asset.services
+                if service.port == port and service.state == "open"
+            }
+            if len(protocols) == 1:
+                return next(iter(protocols))
+        return None
+
+    @staticmethod
+    def _cves(value: object) -> list[str]:
+        if isinstance(value, str):
+            values = [value]
+        elif isinstance(value, list):
+            values = [item for item in value if isinstance(item, str)]
+        else:
+            return []
+        return list(
+            dict.fromkeys(
+                match.upper()
+                for entry in values
+                for match in re.findall(
+                    r"CVE-\d{4}-\d{4,}", entry, flags=re.IGNORECASE
+                )
+            )
+        )
+
     def run(self, asset: Asset) -> ToolResult:
         if not self.available():
             return ToolResult(tool=self.name, status="unavailable", message="nuclei not found")
@@ -153,13 +200,27 @@ class NucleiScanner(Scanner):
             return ToolResult(tool=self.name, status="failed", message=str(exc))
         for header in headers:
             argv += ["-H", header]
-        proc = run_command(
-            argv, timeout=self.timeout(float(self.config.get("timeout", 600)))
-        )
-        if proc.returncode != 0 and not outfile.exists():
-            return ToolResult(tool=self.name, status="failed", message=proc.stderr.strip() or "nuclei failed")
+        try:
+            proc = run_command(
+                argv, timeout=self.timeout(float(self.config.get("timeout", 600)))
+            )
+        except CommandExecutionError as exc:
+            return ToolResult(
+                tool=self.name,
+                status="failed",
+                raw_artifact=str(target_file),
+                message=str(exc),
+            )
+        if not outfile.exists():
+            return ToolResult(
+                tool=self.name,
+                status="failed",
+                raw_artifact=str(target_file),
+                message=proc.stderr.strip() or "nuclei produced no JSONL artifact",
+            )
 
         findings: list[Finding] = []
+        parse_errors = 0
         if outfile.exists():
             for line in outfile.read_text(errors="replace").splitlines():
                 if not line.strip():
@@ -167,8 +228,10 @@ class NucleiScanner(Scanner):
                 try:
                     item = json.loads(line)
                 except json.JSONDecodeError:
+                    parse_errors += 1
                     continue
                 if not isinstance(item, dict):
+                    parse_errors += 1
                     continue
                 info = item.get("info", {})
                 if not isinstance(info, dict):
@@ -176,36 +239,75 @@ class NucleiScanner(Scanner):
                 classification = info.get("classification", {})
                 if not isinstance(classification, dict):
                     classification = {}
-                raw_cves = classification.get("cve-id") or []
-                if isinstance(raw_cves, str):
-                    raw_cves = [raw_cves]
-                severity = str(info.get("severity") or "unknown").lower()
+                raw_severity = info.get("severity")
+                severity = (
+                    raw_severity.strip().lower()
+                    if isinstance(raw_severity, str)
+                    else "unknown"
+                )
                 if severity not in {"critical", "high", "medium", "low", "info"}:
                     severity = "unknown"
                 description = info.get("description")
                 remediation = info.get("remediation")
                 matched_at = item.get("matched-at") or item.get("host") or item.get("url")
                 api_match = self._is_api_match(matched_at, api_targets)
+                template_id = item.get("template-id")
+                if not isinstance(template_id, str) or not template_id.strip():
+                    template_id = None
+                else:
+                    template_id = template_id.strip()
+                name = info.get("name")
+                if not isinstance(name, str) or not name.strip():
+                    name = template_id
+                else:
+                    name = name.strip()
+                if name is None:
+                    parse_errors += 1
+                    continue
+                port = self._matched_port(item)
+                references = info.get("reference")
+                if isinstance(references, str):
+                    references = [references.strip()] if references.strip() else []
+                elif isinstance(references, list):
+                    references = [
+                        value.strip()
+                        for value in references
+                        if isinstance(value, str) and value.strip()
+                    ]
+                else:
+                    references = []
                 findings.append(Finding(
                     tool=self.name,
-                    title=info.get("name") or item.get("template-id") or "Nuclei finding",
+                    title=name,
                     severity=severity,
                     category=self._category(matched_at, api_match),
-                    port=self._matched_port(item),
-                    protocol="tcp",
-                    cve=[str(cve).upper() for cve in raw_cves if cve],
+                    port=port,
+                    protocol=self._matched_protocol(item, asset, port),
+                    cve=self._cves(classification.get("cve-id")),
+                    check_id=template_id,
                     evidence={
                         "matched_at": matched_at,
                         "target_source": "kiterunner" if api_match else "service_discovery",
-                        "template_id": item.get("template-id"),
+                        "template_id": template_id,
                         "description": description if isinstance(description, str) else None,
-                        "references": info.get("reference") or [],
+                        "references": references,
+                        "nuclei_severity": raw_severity if isinstance(raw_severity, str) else None,
                     },
                     remediation=(
                         remediation if isinstance(remediation, str) else None
                     ),
                 ))
-        if proc.returncode != 0:
+        if proc.returncode != 0 or parse_errors:
+            messages = []
+            if proc.returncode != 0:
+                messages.append(
+                    proc.stderr.strip()
+                    or f"nuclei exited with code {proc.returncode}"
+                )
+            if parse_errors:
+                messages.append(
+                    f"ignored {parse_errors} malformed Nuclei JSONL record(s)"
+                )
             return ToolResult(
                 tool=self.name,
                 status="failed",
@@ -213,7 +315,7 @@ class NucleiScanner(Scanner):
                 raw_artifact=(
                     f"{outfile}, {target_file}" if outfile.exists() else str(target_file)
                 ),
-                message=proc.stderr.strip() or f"nuclei exited with code {proc.returncode}",
+                message="; ".join(messages),
             )
         return ToolResult(
             tool=self.name,

@@ -249,6 +249,23 @@ def _joined(values: Iterable[Any]) -> str:
     return "; ".join(str(value) for value in values if value not in (None, ""))
 
 
+def _finding_description(finding: Finding) -> str:
+    """Prefer scanner-provided narrative fields without dumping structured JSON."""
+    for key in ("description", "finding", "reason", "summary", "message"):
+        value = finding.evidence.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        if isinstance(value, list):
+            parts = [
+                item.strip()
+                for item in value
+                if isinstance(item, str) and item.strip()
+            ]
+            if parts:
+                return "; ".join(parts)
+    return ""
+
+
 def _coverage_status(asset: Asset) -> str:
     statuses = {result.status for result in asset.tools.values()}
     if asset.status != "up":
@@ -415,6 +432,7 @@ def _raw_finding_id(asset: Asset, finding: Finding) -> str:
             str(finding.port or ""),
             finding.protocol or "",
             finding.title,
+            _finding_description(finding),
             ",".join(sorted(finding.cve)),
             finding.check_id or "",
             finding.policy_id or "",
@@ -487,14 +505,13 @@ def _correlated_row(asset: Asset, finding: CorrelatedFinding) -> dict[str, Any]:
 def _raw_row(asset: Asset, finding: Finding) -> dict[str, Any]:
     row = _base_finding_row(asset, finding.port, finding.protocol)
     row.update(_scanner_details(asset, [finding.tool]))
-    description = finding.evidence.get("description")
     row.update(
         {
             "record_type": "finding",
             "analysis_mode": "raw",
             "finding_id": _raw_finding_id(asset, finding),
             "title": finding.title,
-            "description": description if isinstance(description, str) else "",
+            "description": _finding_description(finding),
             "category": finding.category,
             "affected_ports": finding.port if finding.port is not None else "",
             "severity": finding.severity,
@@ -692,9 +709,7 @@ def _consolidated_row(
     if finding is not None:
         record_type = "finding"
         title = finding.title
-        description = finding.evidence.get("description")
-        if not isinstance(description, str):
-            description = ""
+        description = _finding_description(finding)
     elif result is not None:
         record_type = "scanner_summary"
         title = (
